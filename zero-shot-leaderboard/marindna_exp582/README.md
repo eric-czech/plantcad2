@@ -14,5 +14,10 @@ uv run python -m exp582_evals.historical .
 
 MoE scoring and embedding adapters are being validated before any production evaluation.
 Language BPE needs explicit base-coordinate handling: four vocabulary logits cannot represent the original next-base task.
-The proposed causal-prefix scoring rule remains a protocol choice for review.
+The provisional causal-prefix scorer independently retokenizes each A/C/G/T candidate through the queried base, scores its divergent token suffix, and normalizes the four scores.
+It reproduces the old four-logit rule for a character tokenizer and supplies no right flank.
+For BPE, it scores canonical tokenizations rather than marginalizing over all tokenizations; this remains a protocol choice for review.
+Allele-frequency scoring uses full-vocabulary ALT-minus-REF likelihood, with independent REF/ALT tokenization and forward/reverse-complement averaging.
+The archive includes already-computed full-vocabulary dense metrics, alongside the previous A/C/G/T-restricted metrics.
+Provisional probe features use a base-weighted whole-window mean and the hidden state of the token covering the variant; BPE variant-token states can include adjacent bases in that token.
 The training branch owns native model restoration and CoreWeave execution; all jobs use batch priority and user `eczech`.

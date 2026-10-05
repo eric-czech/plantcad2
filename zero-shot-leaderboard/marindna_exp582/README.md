@@ -13,13 +13,13 @@ uv run python -m exp582_evals.historical .
 ```
 
 MoE scoring and embedding adapters are being validated before any production evaluation.
-Language BPE needs explicit base-coordinate handling: four vocabulary logits cannot represent the original next-base task.
-The provisional causal-prefix scorer independently retokenizes each A/C/G/T candidate through the queried base, scores its divergent token suffix, and normalizes the four scores.
-It reproduces the old four-logit rule for a character tokenizer and supplies no right flank.
-For BPE, it scores canonical tokenizations rather than marginalizing over all tokenizations; this remains a protocol choice for review.
-Allele-frequency scoring uses full-vocabulary ALT-minus-REF likelihood, with independent REF/ALT tokenization and forward/reverse-complement averaging.
+Both conditions now encode one token per DNA character: pretrained uses its original language vocabulary IDs, and scratch uses the reduced DNA vocabulary.
+The training project supplies the lowercase character tokenizer; its original BPE tokenizer remains available separately for future text evaluations.
+The causal-prefix candidate scorer is exactly the four A/C/G/T output-logit softmax for these encodings, with no right flank supplied.
+Allele-frequency scoring keeps full-vocabulary ALT-minus-REF likelihood and forward/reverse-complement averaging; the pretrained output vocabulary is not reduced during training or likelihood scoring.
 The archive includes already-computed full-vocabulary dense metrics, alongside the previous A/C/G/T-restricted metrics.
-Provisional probe features use a base-weighted whole-window mean and the hidden state of the token covering the variant; BPE variant-token states can include adjacent bases in that token.
+With one token per base, whole-window feature pooling is the ordinary mean and a variant-token feature covers exactly the variant base.
+The generic BPE scoring utilities remain available for interpreting earlier diagnostic artifacts, but are not the planned exp582 DNA encoding.
 The training branch owns native model restoration and CoreWeave execution; all jobs use batch priority and user `eczech`.
 
 `runtime_validation` generates separate synthetic windows and validates saved GPU token likelihoods and frozen features against the scoring interface.

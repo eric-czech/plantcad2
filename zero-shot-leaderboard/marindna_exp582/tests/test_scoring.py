@@ -38,6 +38,35 @@ def test_character_candidates_reproduce_original_four_logit_softmax():
     np.testing.assert_array_equal(probabilities, model.base_probabilities("tacTTTT", 3))
 
 
+def test_pretrained_ids_keep_full_vocabulary_loss_and_four_base_probabilities():
+    base_ids = {"a": 64, "c": 66, "g": 70, "t": 83}
+    vocab = {f"unused_{i}": i for i in range(128256)}
+    for base, index in base_ids.items():
+        del vocab[f"unused_{index}"]
+        vocab[base] = index
+    tokenizer = Tokenizer(models.WordLevel(vocab, unk_token="unused_0"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Split("", "isolated")
+    logits = np.random.default_rng(582).normal(size=(4, len(vocab)))
+    # Non-DNA output mass must remain in variant likelihoods, but cancels when
+    # converting one shared-prefix distribution to conditional A/C/G/T scores.
+    logits[:, 17] = [20, 30, 40, 50]
+    logps = log_softmax(logits, axis=-1)
+    context_rows = {index: row for row, index in enumerate(base_ids.values())}
+
+    def score(batch):
+        return [logps[[context_rows[x] for x in ids[:-1]], ids[1:]] for ids in batch]
+
+    model = SequenceScorer(tokenizer, score)
+    np.testing.assert_allclose(
+        model.base_probabilities("tacga", 3),
+        softmax(logits[1, list(base_ids.values())]),
+        atol=1e-14,
+    )
+    ref, alt = "tacga", "tatga"
+    ref_log, alt_log = score([model.encode(ref), model.encode(alt)])
+    assert model.llr(ref, alt) == pytest.approx(alt_log.sum() - ref_log.sum())
+
+
 def test_bpe_retokenizes_before_variant_and_scores_only_divergent_suffix():
     tokenizer = Tokenizer(
         models.BPE(

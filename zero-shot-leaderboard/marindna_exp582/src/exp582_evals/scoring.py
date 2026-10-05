@@ -1,4 +1,4 @@
-"""Provisional base-coordinate scoring for unchanged character and language tokenizers.
+"""Base-coordinate scoring for character DNA and historical BPE diagnostics.
 
 Canonical BPE strings are scored after independent retokenization. This is a
 likelihood-based scoring rule, not an exact marginal over all BPE segmentations.

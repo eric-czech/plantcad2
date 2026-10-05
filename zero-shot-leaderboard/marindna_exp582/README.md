@@ -21,3 +21,8 @@ Allele-frequency scoring uses full-vocabulary ALT-minus-REF likelihood, with ind
 The archive includes already-computed full-vocabulary dense metrics, alongside the previous A/C/G/T-restricted metrics.
 Provisional probe features use a base-weighted whole-window mean and the hidden state of the token covering the variant; BPE variant-token states can include adjacent bases in that token.
 The training branch owns native model restoration and CoreWeave execution; all jobs use batch priority and user `eczech`.
+
+`runtime_validation` generates separate synthetic windows and validates saved GPU token likelihoods and frozen features against the scoring interface.
+It covers causal next-base scoring, REF/ALT reversal, reverse-complement averaging, and a train-only standardized fixed-alpha toy probe for each readout.
+These fixtures contain no benchmark labels, and their metrics are validation diagnostics, not scientific results or a substitute for the real probe's genomic-block cross-validation.
+Keeping the scoring check on the CPU also avoids forwarding private-repository credentials to GPU workers.

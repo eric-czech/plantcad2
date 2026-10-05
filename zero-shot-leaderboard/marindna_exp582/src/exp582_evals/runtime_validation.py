@@ -10,7 +10,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from tokenizers import Tokenizer
 
-from exp582_evals.scoring import BASES, SequenceScorer, reverse_complement
+from exp582_evals.scoring import (
+    BASES,
+    SequenceScorer,
+    paired_probe_feature,
+    reverse_complement,
+)
 
 
 def tokenizer_digest(tokenizer: Tokenizer) -> str:
@@ -31,7 +36,19 @@ def synthetic_requests(tokenizer: Tokenizer, *, bases: int = 8192) -> dict[str, 
     requests: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
 
-    def add(sequence: str) -> int:
+    def add(sequence: str, variant_position: int | None = None) -> int:
+        variant_position = (
+            min(position, len(sequence) - 1)
+            if variant_position is None
+            else variant_position
+        )
+        if (
+            sequence in seen
+            and requests[seen[sequence]]["variant_position"] != variant_position
+        ):
+            raise ValueError(
+                "One sequence was requested at conflicting variant positions"
+            )
         if sequence not in seen:
             encoding = tokenizer.encode(sequence, add_special_tokens=False)
             if not 2 <= len(encoding.ids) <= 8192:
@@ -41,7 +58,7 @@ def synthetic_requests(tokenizer: Tokenizer, *, bases: int = 8192) -> dict[str, 
                 {
                     "sequence": sequence,
                     "ids": encoding.ids,
-                    "variant_position": min(position, len(sequence) - 1),
+                    "variant_position": variant_position,
                 }
             )
         return seen[sequence]
@@ -51,9 +68,11 @@ def synthetic_requests(tokenizer: Tokenizer, *, bases: int = 8192) -> dict[str, 
     for ref in sequences[:4]:
         alternative = BASES[(BASES.index(ref[position]) + 1) % 4]
         alt = ref[:position] + alternative + ref[position + 1 :]
-        llr_cases.append({"reference": ref, "alternate": alt})
-        for sequence in (ref, alt, reverse_complement(ref), reverse_complement(alt)):
+        llr_cases.append({"reference": ref, "alternate": alt, "position": position})
+        for sequence in (ref, alt):
             add(sequence)
+        for sequence in (reverse_complement(ref), reverse_complement(alt)):
+            add(sequence, bases - 1 - position)
     base_cases = []
     for sequence in sequences[:2]:
         base_cases.append({"sequence": sequence, "position": position})
@@ -159,4 +178,44 @@ def validate_outputs(
         metrics[f"synthetic_probe/{name}/mse"] = float(
             np.mean((predictions - target[24:]) ** 2)
         )
+        lookup = {item["sequence"]: i for i, item in enumerate(items)}
+        paired = []
+        for case in requests["llr_cases"]:
+            ref, alt, position = case["reference"], case["alternate"], case["position"]
+            sequences = (ref, alt, reverse_complement(ref), reverse_complement(alt))
+            rows = [lookup[sequence] for sequence in sequences]
+            expected_positions = (
+                position,
+                position,
+                len(ref) - 1 - position,
+                len(alt) - 1 - position,
+            )
+            if any(
+                items[row]["variant_position"] != expected
+                for row, expected in zip(rows, expected_positions, strict=True)
+            ):
+                raise ValueError(
+                    "Probe variant position does not follow the strand transform"
+                )
+            vectors = [values[row] for row in rows]
+            feature = paired_probe_feature(*vectors)
+            np.testing.assert_array_equal(
+                feature,
+                paired_probe_feature(vectors[2], vectors[3], vectors[0], vectors[1]),
+            )
+            paired.append(feature)
+        paired = np.asarray(paired)
+        # Four synthetic variant pairs exercise the historical feature contract;
+        # arbitrary labels and a 3/1 split have no scientific interpretation.
+        if paired.shape != (4, 2 * values.shape[1]):
+            raise ValueError("Unexpected paired probe dimensions")
+        paired_probe = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+        paired_probe.fit(paired[:3], np.asarray([0.1, 0.2, 0.4]))
+        np.testing.assert_allclose(
+            paired_probe[0].mean_, paired[:3].mean(axis=0, dtype=np.float64)
+        )
+        prediction = paired_probe.predict(paired[3:])
+        if not np.isfinite(prediction).all():
+            raise ValueError("Nonfinite paired-probe prediction")
+        metrics[f"synthetic_probe/{name}/paired_prediction"] = float(prediction[0])
     return metrics

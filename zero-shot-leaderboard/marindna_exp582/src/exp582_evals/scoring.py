@@ -116,3 +116,18 @@ def embedding_features(
     weights = (offsets[:, 1] - offsets[:, 0]).astype(np.float32)
     mean = np.sum(hidden * weights[:, None], axis=0, dtype=np.float32) / len(sequence)
     return mean, hidden[overlap[0]]
+
+
+def paired_probe_feature(
+    ref: np.ndarray, alt: np.ndarray, ref_rc: np.ndarray, alt_rc: np.ndarray
+) -> np.ndarray:
+    """Historical FP32 strand averages followed by [REF, ALT minus REF]."""
+    values = [np.asarray(x, dtype=np.float32) for x in (ref, alt, ref_rc, alt_rc)]
+    if any(
+        x.ndim != 1 or x.shape != values[0].shape or not np.isfinite(x).all()
+        for x in values
+    ):
+        raise ValueError("Expected four finite matching embedding vectors")
+    reference = (values[0] + values[2]) * np.float32(0.5)
+    alternate = (values[1] + values[3]) * np.float32(0.5)
+    return np.concatenate((reference, alternate - reference))

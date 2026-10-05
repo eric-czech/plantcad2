@@ -24,5 +24,6 @@ The training branch owns native model restoration and CoreWeave execution; all j
 
 `runtime_validation` generates separate synthetic windows and validates saved GPU token likelihoods and frozen features against the scoring interface.
 It covers causal next-base scoring, REF/ALT reversal, reverse-complement averaging, and a train-only standardized fixed-alpha toy probe for each readout.
+It also checks the historical FP32 strand-averaged `[REF, ALT − REF]` feature contract on four synthetic variant pairs, using forward position 4,096 and reverse-complement position 4,095.
 These fixtures contain no benchmark labels, and their metrics are validation diagnostics, not scientific results or a substitute for the real probe's genomic-block cross-validation.
 Keeping the scoring check on the CPU also avoids forwarding private-repository credentials to GPU workers.

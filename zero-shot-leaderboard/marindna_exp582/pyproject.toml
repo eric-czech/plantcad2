@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marindna-exp582-evals"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["numpy", "scipy", "scikit-learn", "tokenizers", "huggingface-hub"]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/exp582_evals"]

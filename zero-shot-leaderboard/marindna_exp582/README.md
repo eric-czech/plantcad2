@@ -15,7 +15,8 @@ uv run --locked --extra cpu python -m exp582_evals.historical .
 MoE scoring and embedding adapters are being validated before any production evaluation.
 Both conditions now encode one token per DNA character: pretrained uses its original language vocabulary IDs, and scratch uses the reduced DNA vocabulary.
 The training project supplies the lowercase character tokenizer; its original BPE tokenizer remains available separately for future text evaluations.
-The causal-prefix candidate scorer is exactly the four A/C/G/T output-logit softmax for these encodings, with no right flank supplied.
+Candidate scoring uses the four A/C/G/T output-logit softmax for these encodings.
+The native runner receives full windows, and causal attention masks the right flank when predicting each target; the synthetic prefix scorer supplies only the left prefix.
 Allele-frequency scoring keeps full-vocabulary ALT-minus-REF likelihood and forward/reverse-complement averaging; the pretrained output vocabulary is not reduced during training or likelihood scoring.
 The archive includes already-computed full-vocabulary dense metrics, alongside the previous A/C/G/T-restricted metrics.
 With one token per base, whole-window feature pooling is the ordinary mean and a variant-token feature covers exactly the variant base.

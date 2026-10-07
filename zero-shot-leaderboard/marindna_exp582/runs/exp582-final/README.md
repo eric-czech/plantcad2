@@ -1,15 +1,14 @@
-# exp582 final task and zero-shot AF results
+# exp582 final task, zero-shot AF, and probe results
 
 These are full-split evaluations of the final step-21,440 checkpoints for the selected d1536 MoE trials: pretrained 1× and random 2×. Both saw 11.24B DNA tokens, about 0.52 corpus passes; the dense references are archived exp472 results and were not rerun.
 
 ![Model-family comparison](assets/exp582-model-family-overview.png)
 
 - The random model is slightly ahead on the original 8K natural composite: **0.6256 vs 0.6213**. Both trail dense 0.22T (0.6843), with masked motifs the largest gap.
+- Frozen probes close much of the AF gap: the best new result is the random 2× 8K strand-averaged variant-token probe at **0.1868 Spearman**, compared with **0.1837** pretrained and **0.1912** for dense 0.22T.
 - Equal-weight forward/reverse-complement PoE improves the three-group composite by **+0.0021** pretrained and **+0.0026** random. It helps conservation and motifs but consistently hurts core/non-core classification, so it is useful as a task-dependent readout rather than a universal replacement.
 - Centering a 2K crop hurts the three-group task composite but improves natural AF Spearman from **0.1139 to 0.1270** pretrained and **0.1187 to 0.1248** random.
-- Separate forward and reverse-complement passes are the strongest task-independent bidirectional method tested. Rotated and sandwich single-pass prompts do not improve held-out nucleotide likelihood; the pretrained sandwich prompt fails badly.
-
-> Frozen-embedding probe fitting is intentionally deferred. The complete embeddings remain in durable storage, so fitting them later will not require another model-inference pass.
+- Separate forward and reverse-complement passes are the strongest task-independent bidirectional scoring method tested. For probes, averaging the two strand representations beats concatenating directional features in all eight matched comparisons. Rotated and sandwich single-pass prompts do not improve held-out nucleotide likelihood; the pretrained sandwich prompt fails badly.
 
 ## Full task results and inference methods
 
@@ -119,6 +118,31 @@ The PlantCAD2 AF rows use the older 10k sample and are shown only as historical 
 
 </details>
 
+## Frozen-embedding probes
+
+![Frozen-embedding probe readouts](assets/exp582-probe-readouts.png)
+
+All probes use the historical fixed split: 65,565 train variants and 28,378 held-out test variants, grouped by 1 Mb genomic blocks. A strand-averaged variant-token representation is best for both models at 8K. The random model comes within **0.0044** of dense 0.22T and **0.0082** of dense 0.56T despite seeing far fewer DNA tokens.
+
+The directional feature contract keeps forward and reverse-complement embeddings separate, but it never beats simple strand averaging here. Shortening context to 2K improves whole-window probes while slightly reducing variant-token probes, so the useful context length depends on the representation rather than having one universal optimum.
+
+<details>
+<summary><strong>Held-out probe Spearman and historical comparison</strong></summary>
+
+| Model / context | Zero-shot | Whole averaged | Whole directional | Variant averaged | Variant directional |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| MoE pretrained 1× · 8192 | 0.11668 | 0.17399 | 0.16809 | 0.18372 | 0.17955 |
+| MoE pretrained 1× · 2048 | 0.12476 | 0.18010 | 0.17899 | 0.18199 | 0.17904 |
+| MoE random 2× · 8192 | 0.11160 | 0.17705 | 0.17009 | **0.18677** | 0.18178 |
+| MoE random 2× · 2048 | 0.12090 | 0.18375 | 0.18101 | 0.18488 | 0.17965 |
+| MarinDNA 1B 0.22T · 8192 | 0.14300 | 0.18009 | — | 0.19119 | — |
+| MarinDNA 1B 0.39T · 8192 | 0.13943 | 0.18009 | — | 0.19158 | — |
+| MarinDNA 1B 0.56T · 8192 | 0.14154 | 0.18027 | — | 0.19501 | — |
+
+The new rows use StandardScaler → Ridge with alpha selected by train-only grouped cross-validation. Figure error bars are paired 1 Mb genomic-block bootstrap 95% intervals. Dense values are archived exp472 results on the same held-out split and were not recomputed. No comparable PlantCAD2, PlantCAD2.5, or Evo frozen-probe result is available.
+
+</details>
+
 ## Task-independent bidirectional method validation
 
 ![Intrinsic bidirectional method comparison](assets/exp582-intrinsic-methods.png)
@@ -136,7 +160,8 @@ The method selection used 256 source windows with both orientations kept in the 
 - Evaluation: 16 one-node H100x8 workers per model at Iris batch priority under `eczech`; 3,185 independently committed chunks per model and 6,370 total.
 - Coverage: 1,727,943 rows across all 20 tasks at 8K; 19 centered tasks at 2K; 94,075 AF variants at each context; complete row order, chunk checksums, checkpoint/tokenizer/input bindings, runtime oracles, and Sonic backend identity verified independently for every worker.
 - Reduction receipts: pretrained `68c7049c583effb5061c71027ae40bb8a56d7c78edadec045a318d4e0b0a5aad`; random `2395d77f5928494fbb4597d1c76ffa389e679336a77790b4fa80cabd419848ee`. Every stored file was rehashed; AF membership, finiteness, and every overall/by-consequence Pearson and Spearman value were independently recomputed.
-- The initial CPU reducer was launched on all eight local ranks. One rank committed each complete receipt; a peer then rejected its different temporary-path string in `result.json`. The scientific artifacts above passed independent validation, and MarinDNA commit `916e03d` makes future postprocessing single-writer.
-- [Pretrained training run](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-pretrained-lrm1-seed0-v1) · [random training run](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-random-lrm2-seed0-v1) · [pretrained reduction](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-pretrained-lrm1-seed0-final-eval-postprocess-smoke-v1) · [random reduction](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-random-lrm2-seed0-final-eval-postprocess-smoke-v1)
+- Probe protocol: four frozen-feature probes per model and context, with historical train-only grouped cross-validation and 1,000 paired genomic-block bootstrap replicates. Probe receipts: pretrained `6080ff88d84804533f9c19dc24000c8b9f164d98ad72572312161ccc4c6cecac`; random `83bfcadf3927eee53f0a6538434d035338cf68d07ef0d8e6874948cecf38c333`. All 32 receipt-bound artifacts were rehashed; every held-out point correlation was independently recomputed, every saved estimator was reloaded, and no fit showed alpha-grid truncation risk.
+- Postprocessing uses Iris's explicit local process index to enforce one writer per H100 node. The final probe prefixes were empty before the clean single-writer attempts.
+- [Pretrained training run](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-pretrained-lrm1-seed0-v1) · [random training run](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-random-lrm2-seed0-v1) · [pretrained reduction](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-pretrained-lrm1-seed0-final-eval-postprocess-smoke-v1) · [random reduction](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-random-lrm2-seed0-final-eval-postprocess-smoke-v1) · [pretrained probes](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-pretrained-lrm1-seed0-final-eval-probes-smoke-v2) · [random probes](https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-random-lrm2-seed0-final-eval-probes-smoke-v2)
 
 </details>

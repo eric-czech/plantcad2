@@ -44,17 +44,39 @@ class NativeAdapter:
         outputs = []
         for offset in range(0, len(sequences), batch_size):
             batch = sequences.iloc[offset : offset + batch_size].tolist()
+            source_length = len(batch[0])
+            if any(len(sequence) != source_length for sequence in batch):
+                raise ValueError("Task batch contains unequal sequence lengths")
+            if (
+                source_length < self.sequence_length
+                or (source_length - self.sequence_length) % 2
+            ):
+                raise ValueError("Task sequence cannot be center-cropped")
+            crop_start = (source_length - self.sequence_length) // 2
+            query_positions = [position - crop_start for position in positions]
+            if any(
+                position < 0 or position >= self.sequence_length
+                for position in query_positions
+            ):
+                raise ValueError("Task target falls outside the centered context")
+            batch = [
+                sequence[crop_start : crop_start + self.sequence_length]
+                for sequence in batch
+            ]
             ids = [
                 self.tokenizer.encode(x, add_special_tokens=False).ids for x in batch
             ]
             output = self.scorer.evaluate(
-                ids, [positions] * len(batch), [0] * len(batch), allele_frequency=False
+                ids,
+                [query_positions] * len(batch),
+                [0] * len(batch),
+                allele_frequency=False,
             )
             outputs.append(output["probabilities"][:, : len(positions)])
             if progress is not None:
                 progress(offset + len(batch), len(sequences))
         wall = time.monotonic() - start
-        tokens = int(sequences.str.len().sum())
+        tokens = len(sequences) * self.sequence_length
         return np.concatenate(outputs), {
             "sequences": len(sequences),
             "tokens": tokens,
@@ -64,7 +86,9 @@ class NativeAdapter:
             "tokens_per_second": tokens / wall,
         }
 
-    def allele_frequency(self, frame: pd.DataFrame) -> tuple[dict, dict]:
+    def allele_frequency(
+        self, frame: pd.DataFrame, *, include_strand_average: bool = True
+    ) -> tuple[dict, dict]:
         """Use original suffix reduction and strand-averaged frozen representations."""
         protocol = original()
         predictions = {"row_id": frame.row_id.to_numpy(dtype=np.int64)}
@@ -136,10 +160,11 @@ class NativeAdapter:
                     embeddings[f"{representation}_{allele}_{strand}"] = strands[strand][
                         allele
                     ][field].astype(np.float32)
-                embeddings[f"{representation}_{allele}"] = (
-                    strands["fwd"][allele][field].astype(np.float32)
-                    + strands["rc"][allele][field].astype(np.float32)
-                ) * np.float32(0.5)
+                if include_strand_average:
+                    embeddings[f"{representation}_{allele}"] = (
+                        strands["fwd"][allele][field].astype(np.float32)
+                        + strands["rc"][allele][field].astype(np.float32)
+                    ) * np.float32(0.5)
         return predictions, embeddings
 
 

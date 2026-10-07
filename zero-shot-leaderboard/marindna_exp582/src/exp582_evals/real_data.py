@@ -64,7 +64,7 @@ def sample_task(
     }
 
 
-def af_inputs() -> tuple[pd.DataFrame, dict]:
+def af_membership() -> tuple[pd.DataFrame, dict]:
     def download(suffix: str) -> Path:
         return Path(
             hf_hub_download(
@@ -103,6 +103,23 @@ def af_inputs() -> tuple[pd.DataFrame, dict]:
     ):
         raise ValueError("Historical membership/split mismatch")
     frame = frame.merge(split, on="row_id", validate="1:1")
+    if set(frame[frame.split.eq("train")].block_id) & set(
+        frame[frame.split.eq("test")].block_id
+    ):
+        raise ValueError("Train/test blocks overlap")
+    return frame.sort_values("row_id").reset_index(drop=True), {
+        "archive_revision": ARCHIVE_REVISION,
+        "historical_split_sha256": digest,
+        "split_file_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "input_file_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        "rows": len(frame),
+        "train": int(frame.split.eq("train").sum()),
+        "test": int(frame.split.eq("test").sum()),
+    }
+
+
+def af_inputs() -> tuple[pd.DataFrame, dict]:
+    frame, source = af_membership()
     samples = []
     for (_, membership), group in frame[frame.split.isin(["train", "test"])].groupby(
         ["consequence", "split"], sort=True
@@ -113,10 +130,6 @@ def af_inputs() -> tuple[pd.DataFrame, dict]:
     pilot = pd.concat(samples).sort_values("row_id").reset_index(drop=True)
     if len(pilot) != 2112 or pilot.row_id.duplicated().any():
         raise ValueError("Pilot AF inventory differs")
-    if set(pilot[pilot.split == "train"].block_id) & set(
-        pilot[pilot.split == "test"].block_id
-    ):
-        raise ValueError("Train/test blocks overlap")
     # Check against ALL historical test windows, including unsampled ones.
     for chrom, group in pilot[pilot.split == "train"].groupby("chrom"):
         positions = np.sort(
@@ -127,10 +140,7 @@ def af_inputs() -> tuple[pd.DataFrame, dict]:
             if any(abs(position - p) < 8192 for p in positions[max(0, j - 1) : j + 1]):
                 raise ValueError("Training window overlaps historical test window")
     return pilot, {
-        "archive_revision": ARCHIVE_REVISION,
-        "historical_split_sha256": digest,
-        "split_file_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
-        "input_file_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        **source,
         "rows": len(pilot),
         "train": 1408,
         "test": 704,

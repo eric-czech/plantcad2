@@ -1,6 +1,7 @@
 """Exercise native inference through the original task/AF entry points."""
 
 import argparse
+import itertools
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 import torch
 from tokenizers import Tokenizer, models, normalizers, pre_tokenizers
 
+from exp582_evals.full_data import assign_task_files, task_plan
 from exp582_evals.native import NativeAdapter, _center_crop
 from exp582_evals.protocol import original
 
@@ -36,14 +38,14 @@ class FakeScorer:
 
 def test_original_task_scoring_accepts_native_leaf():
     protocol = original()
-    adapter = NativeAdapter(FakeScorer(), tokenizer())
+    adapter = NativeAdapter(FakeScorer(), tokenizer(), sequence_length=4)
     spec = {
         "kind": "conservation",
         "positions": [1],
         "contexts": ["left", "right_reverse_complement"],
     }
     frame = pd.DataFrame(
-        {"sequence": ["AAA", "ACA", "AGA", "ATA"], "label": [1, 0, 1, 0]}
+        {"sequence": ["AAAA", "ACAA", "AGAA", "ATAA"], "label": [1, 0, 1, 0]}
     )
     args = argparse.Namespace(batch_size=8, softmax_dtype="fp32", use_cache=False)
     result, arrays = protocol.tasks._score_standard_task(
@@ -69,6 +71,23 @@ def test_center_crop_preserves_the_middle_base_and_rejects_asymmetry():
         _center_crop("AAAAAAA", 4)
 
 
+def test_standard_task_center_crop_shifts_query_positions():
+    class RecordingScorer(FakeScorer):
+        def evaluate(self, ids, positions, feature_positions, *, allele_frequency):
+            assert len(ids[0]) == 4
+            assert positions == [[1], [1]]
+            return super().evaluate(
+                ids, positions, feature_positions, allele_frequency=allele_frequency
+            )
+
+    adapter = NativeAdapter(RecordingScorer(), tokenizer(), sequence_length=4)
+    probabilities, timing = adapter.score_positions(
+        pd.Series(["AACCGGTT", "TTAACCGG"]), [3], 8
+    )
+    assert probabilities.shape == (2, 1, 4)
+    assert timing["tokens"] == 8
+
+
 def test_original_af_reduction_suffix_and_ambiguity():
     p = original()
     ref = torch.tensor([[-100.0, -100.0, -100.0, -100.0]])
@@ -79,3 +98,38 @@ def test_original_af_reduction_suffix_and_ambiguity():
     actual = p.af.reduce_uncached(acgt, acgt, valid, 2)
     # Earlier prefix cancels, ambiguous targets excluded only from ACGT score.
     np.testing.assert_array_equal(actual.numpy(), [[4.0, 6.0, 1.0]])
+
+
+def test_full_plan_preserves_task_locality_and_exact_coverage():
+    tasks = [
+        {"key": "large", "file": "large.tsv"},
+        {"key": "medium", "file": "medium.tsv"},
+    ]
+    inputs = {
+        "large.tsv": {
+            "files": [
+                {"path": "large-0.parquet", "rows": 4104},
+                {"path": "large-1.parquet", "rows": 2056},
+            ]
+        },
+        "medium.tsv": {"files": [{"path": "medium-0.parquet", "rows": 1025}]},
+    }
+    assignment = assign_task_files(tasks, inputs, workers=2)
+    plan = task_plan(tasks, inputs, workers=2, chunk_size=2048)
+    sizes = {"large": 6160, "medium": 1025}
+    for task, size in sizes.items():
+        pieces = sorted(
+            (piece for piece in plan if piece["task"] == task),
+            key=lambda piece: piece["start"],
+        )
+        assert pieces[0]["start"] == 0 and pieces[-1]["stop"] == size
+        assert all(
+            left["stop"] == right["start"] for left, right in itertools.pairwise(pieces)
+        )
+        for piece in pieces:
+            assert piece["worker"] == assignment[(task, piece["source_path"])]
+    for path in {piece["source_path"] for piece in plan}:
+        assert (
+            len({piece["worker"] for piece in plan if piece["source_path"] == path})
+            == 1
+        )

@@ -17,6 +17,7 @@ dependencies = [
     "tokenizers",
     "huggingface-hub",
     "pandas>=3.0.6",
+    "matplotlib>=3.10",
     "pyarrow>=25.0.1",
     "pyfaidx>=0.9.0.4",
     "einops>=0.8.2",

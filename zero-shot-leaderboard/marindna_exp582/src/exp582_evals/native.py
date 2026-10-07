@@ -14,8 +14,13 @@ from exp582_evals.protocol import original
 class NativeAdapter:
     plantcad_native = True
 
-    def __init__(self, scorer: Any, tokenizer: Any) -> None:
+    def __init__(
+        self, scorer: Any, tokenizer: Any, *, sequence_length: int = 8192
+    ) -> None:
         self.scorer, self.tokenizer = scorer, tokenizer
+        if sequence_length < 2 or sequence_length % 2 or sequence_length > 8192:
+            raise ValueError("Evaluation context must be even and no larger than 8192")
+        self.sequence_length = sequence_length
         ids = [tokenizer.encode(base, add_special_tokens=False).ids for base in "ACGT"]
         if any(len(x) != 1 for x in ids) or [x[0] for x in ids] != list(
             scorer.base_ids
@@ -66,13 +71,17 @@ class NativeAdapter:
         embeddings = {"row_id": predictions["row_id"]}
         strands = {}
         for strand in ("fwd", "rc"):
-            position = protocol.af.variant_position(8192, strand)
+            position = protocol.af.variant_position(self.sequence_length, strand)
             values = {"ref": [], "alt": []}
             for offset in range(0, len(frame), self.scorer.batch_size):
                 batch = frame.iloc[offset : offset + self.scorer.batch_size]
-                refs = batch.sequence.tolist()
+                refs = [
+                    _center_crop(sequence, self.sequence_length)
+                    for sequence in batch.sequence.tolist()
+                ]
+                center = self.sequence_length // 2
                 alts = [
-                    s[:4096] + a.upper() + s[4097:]
+                    s[:center] + a.upper() + s[center + 1 :]
                     for s, a in zip(refs, batch.alt, strict=True)
                 ]
                 for allele, sequences in [("ref", refs), ("alt", alts)]:
@@ -111,14 +120,31 @@ class NativeAdapter:
                 ("non_acgt_targets", 2),
             ]:
                 predictions[f"{col}_{strand}"] = scores[:, index]
+            ref_probabilities = merged["ref"]["probabilities"][:, 0]
+            alt_probabilities = merged["alt"]["probabilities"][:, 0]
+            np.testing.assert_allclose(
+                ref_probabilities, alt_probabilities, rtol=0, atol=2e-4
+            )
+            predictions[f"target_probs_{strand}"] = ref_probabilities
             strands[strand] = merged
         for representation, field in [
             ("whole_window", "mean"),
             ("variant_token", "variant"),
         ]:
             for allele in ("ref", "alt"):
+                for strand in ("fwd", "rc"):
+                    embeddings[f"{representation}_{allele}_{strand}"] = strands[strand][
+                        allele
+                    ][field].astype(np.float32)
                 embeddings[f"{representation}_{allele}"] = (
                     strands["fwd"][allele][field].astype(np.float32)
                     + strands["rc"][allele][field].astype(np.float32)
                 ) * np.float32(0.5)
         return predictions, embeddings
+
+
+def _center_crop(sequence: str, length: int) -> str:
+    if len(sequence) < length or (len(sequence) - length) % 2:
+        raise ValueError("Sequence cannot be centered at the requested context length")
+    start = (len(sequence) - length) // 2
+    return sequence[start : start + length]

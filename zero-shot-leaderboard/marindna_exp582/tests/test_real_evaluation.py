@@ -9,7 +9,7 @@ import pytest
 import torch
 from tokenizers import Tokenizer, models, normalizers, pre_tokenizers
 
-from exp582_evals.native import NativeAdapter
+from exp582_evals.native import NativeAdapter, _center_crop
 from exp582_evals.protocol import original
 
 
@@ -61,6 +61,12 @@ def test_token_ids_follow_normalizer_instead_of_uppercase_vocab():
     NativeAdapter(FakeScorer(), tokenizer())
     with pytest.raises(ValueError, match="character encoding"):
         NativeAdapter(SimpleNamespace(base_ids=[7, 4, 5, 6]), tokenizer())
+
+
+def test_center_crop_preserves_the_middle_base_and_rejects_asymmetry():
+    assert _center_crop("AAAACCCC", 4) == "AACC"
+    with pytest.raises(ValueError, match="centered"):
+        _center_crop("AAAAAAA", 4)
 
 
 def test_original_af_reduction_suffix_and_ambiguity():

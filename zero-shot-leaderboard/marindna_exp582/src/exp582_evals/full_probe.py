@@ -13,6 +13,27 @@ from exp582_evals.full_metrics import merge
 from exp582_evals.protocol import original
 
 
+def _validate_roundtrip(estimator, restored, features, expected) -> None:
+    """Require exact fitted parameters and float32-stable repeated predictions."""
+    fitted_arrays = {
+        "scaler": ("mean_", "var_", "scale_"),
+        "ridge": ("coef_", "intercept_"),
+    }
+    for step, attributes in fitted_arrays.items():
+        for attribute in attributes:
+            np.testing.assert_array_equal(
+                getattr(estimator.named_steps[step], attribute),
+                getattr(restored.named_steps[step], attribute),
+            )
+    # Separate BLAS calls may reduce float32 dot products in a different order.
+    np.testing.assert_allclose(
+        restored.predict(features),
+        expected,
+        rtol=0,
+        atol=8 * np.finfo(np.float32).eps,
+    )
+
+
 def fit_probes(
     preparation_path: Path,
     directory: Path,
@@ -72,9 +93,7 @@ def fit_probes(
             estimator_path = output / f"{column}.joblib"
             joblib.dump(estimator, estimator_path, compress=3)
             restored = joblib.load(estimator_path)
-            np.testing.assert_allclose(
-                restored.predict(features[test]), predictions[test], rtol=0, atol=1e-7
-            )
+            _validate_roundtrip(estimator, restored, features[test], predictions[test])
             key = f"{representation}/{contract}"
             fits[key] = {
                 **metadata,

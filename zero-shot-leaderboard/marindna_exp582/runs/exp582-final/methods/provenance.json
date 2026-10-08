@@ -1,5 +1,14 @@
 {
   "reports": {
+    "language-base": {
+      "bytes": 12378,
+      "checkpoint": "s3://marin-us-east-02a/marin/grug/rav-ladder-d1536/2026.08.18/checkpoints/step-15128",
+      "checkpoint_metadata_digest": "7198833f20fd9d1f442e6d0d9ef9738e634d674ff225ed276e7b56d71cf60227",
+      "checkpoint_role": "language-base",
+      "sha256": "39d6d6396ee7ccbc1ac2e8d30357da27e6dbe67a87419c743b8c29f1ab8d0410",
+      "source": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/evaluations/final-v1/validation/language-base/methods-v1/report-39d6d6396ee7ccbc1ac2e8d30357da27e6dbe67a87419c743b8c29f1ab8d0410.json",
+      "wandb": "https://wandb.ai/eric-czech/marin/runs/exp582-plantcad2-d1536-language-base-methods-smoke-v1"
+    },
     "pretrained": {
       "bytes": 12102,
       "checkpoint": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/checkpoints/exp582-plantcad2-d1536-pretrained-lrm1-seed0-v1/2026.10.06/checkpoints/short-linear-v2/step-21440",

@@ -14,6 +14,7 @@ from matplotlib import pyplot as plt
 COLORS = {
     "pretrained": "#2A9D8F",
     "random": "#E76F51",
+    "language_base": "#7C3AED",
     "dense": "#64748B",
     "published": "#94A3B8",
     "poe": "#6D5BD0",
@@ -86,8 +87,30 @@ def new_profile(result: dict, profile: str = "context-8192") -> dict:
     return result["profiles"][profile]
 
 
+def evaluated_models(
+    pretrained: dict, random: dict, language_base: dict | None = None
+) -> list[tuple[str, str, dict, str]]:
+    models = [
+        ("pretrained", "Pretrained 1×", pretrained, COLORS["pretrained"]),
+        ("random", "Random 2×", random, COLORS["random"]),
+    ]
+    if language_base is not None:
+        models.append(
+            (
+                "language_base",
+                "Language-only control",
+                language_base,
+                COLORS["language_base"],
+            )
+        )
+    return models
+
+
 def overview_series(
-    pretrained: dict, random: dict, historical: dict
+    pretrained: dict,
+    random: dict,
+    historical: dict,
+    language_base: dict | None = None,
 ) -> dict[str, list[float]]:
     series = {
         historical["labels"][rung]: historical["groups"][rung]
@@ -95,19 +118,20 @@ def overview_series(
     }
     for label, (_, group_key) in PUBLISHED.items():
         series[label] = historical["published_groups"][group_key]
-    for label, result in (
-        ("MoE pretrained 1×", pretrained),
-        ("MoE random 2×", random),
-    ):
+    for _, label, result, _ in evaluated_models(pretrained, random, language_base):
         groups = new_profile(result)["tasks"]["groups"]["natural"]
-        series[label] = [groups[name] for name in CATEGORIES]
+        series["MoE " + label.lower()] = [groups[name] for name in CATEGORIES]
     return series
 
 
 def model_overview(
-    pretrained: dict, random: dict, historical: dict, output: Path
+    pretrained: dict,
+    random: dict,
+    historical: dict,
+    output: Path,
+    language_base: dict | None = None,
 ) -> None:
-    series = overview_series(pretrained, random, historical)
+    series = overview_series(pretrained, random, historical, language_base)
     labels = list(series)
     values = np.asarray([series[label] for label in labels])
     figure, axes = plt.subplots(
@@ -118,14 +142,15 @@ def model_overview(
     )
     composite = values[:, -1]
     order = np.argsort(composite)
+    new_colors = {
+        "MoE " + label.lower(): color
+        for _, label, _, color in evaluated_models(pretrained, random, language_base)
+    }
     colors = [
-        COLORS["pretrained"]
-        if label == "MoE pretrained 1×"
-        else COLORS["random"]
-        if label == "MoE random 2×"
-        else COLORS["dense"]
-        if label.startswith("MarinDNA")
-        else COLORS["published"]
+        new_colors.get(
+            label,
+            COLORS["dense"] if label.startswith("MarinDNA") else COLORS["published"],
+        )
         for label in labels
     ]
     axes[0].barh(
@@ -151,9 +176,13 @@ def model_overview(
         "MoE pretrained 1×",
         "MoE random 2×",
     ]
+    if language_base is not None:
+        selected.append("MoE language-only control")
     x = np.arange(4)
+    selected_values = []
     for label in selected:
         row = series[label][:-1]
+        selected_values.extend(row)
         emphasized = label.startswith("MoE")
         axes[1].plot(
             x,
@@ -162,17 +191,11 @@ def model_overview(
             linewidth=2.6 if emphasized else 1.15,
             alpha=1 if emphasized else 0.58,
             label=label,
-            color=(
-                COLORS["pretrained"]
-                if label == "MoE pretrained 1×"
-                else COLORS["random"]
-                if label == "MoE random 2×"
-                else None
-            ),
+            color=new_colors.get(label),
         )
     axes[1].set_xticks(x, CATEGORIES[:-1], rotation=18, ha="right")
     axes[1].set_ylabel("Mean task score")
-    axes[1].set_ylim(0.40, 0.9)
+    axes[1].set_ylim(max(0, min(selected_values) - 0.04), 0.9)
     axes[1].grid(axis="y", alpha=0.2)
     axes[1].legend(frameon=False, fontsize=8, ncol=2, loc="lower right")
     figure.suptitle("Exp582 model-family comparison", fontsize=15, weight="bold")
@@ -209,7 +232,11 @@ def historical_task_columns(
 
 
 def task_heatmap(
-    pretrained: dict, random: dict, historical: dict, output: Path
+    pretrained: dict,
+    random: dict,
+    historical: dict,
+    output: Path,
+    language_base: dict | None = None,
 ) -> None:
     labels, historical_columns = historical_task_columns(historical)
     columns = {
@@ -219,14 +246,17 @@ def task_heatmap(
         "PC2.5 Large": historical_columns["PlantCAD2.5-Large"],
         "Evo 2 20B": historical_columns["Evo 2 20B"],
     }
-    for prefix, result in (("Pretrained", pretrained), ("Random", random)):
+    for key, prefix, result, _ in evaluated_models(pretrained, random, language_base):
+        compact_prefix = "Language-only" if key == "language_base" else prefix
         rows = new_profile(result)["tasks"]["rows"]
         if [row["key"] for row in rows] != [
             row["key"] for row in historical["results"]["022t"]["rows"]
         ]:
             raise ValueError(f"New task inventory differs for {prefix}")
-        columns[f"{prefix}\nnatural"] = [row["natural"] for row in rows]
-        columns[f"{prefix}\ntwo-sided"] = [row["bidirectional_poe"] for row in rows]
+        columns[f"{compact_prefix}\nnatural"] = [row["natural"] for row in rows]
+        columns[f"{compact_prefix}\ntwo-sided"] = [
+            row["bidirectional_poe"] for row in rows
+        ]
     names = list(columns)
     values = np.asarray(
         [
@@ -235,7 +265,13 @@ def task_heatmap(
         ]
     ).T
     figure, axis = plt.subplots(figsize=(12.6, 10.8))
-    image = axis.imshow(values, aspect="auto", cmap="viridis", vmin=0.45, vmax=0.9)
+    image = axis.imshow(
+        values,
+        aspect="auto",
+        cmap="viridis",
+        vmin=min(0.45, float(np.nanmin(values))),
+        vmax=0.9,
+    )
     axis.set_xticks(np.arange(len(names)), names, rotation=30, ha="right")
     axis.set_yticks(np.arange(len(labels)), labels, fontsize=8)
     for row in range(values.shape[0]):
@@ -266,10 +302,16 @@ def task_heatmap(
     save(figure, output, "exp582-task-heatmap")
 
 
-def task_context_deltas(pretrained: dict, random: dict, output: Path) -> None:
+def task_context_deltas(
+    pretrained: dict,
+    random: dict,
+    output: Path,
+    language_base: dict | None = None,
+) -> None:
     columns = {}
     labels = None
-    for prefix, result in (("Pretrained", pretrained), ("Random", random)):
+    for key, prefix, result, _ in evaluated_models(pretrained, random, language_base):
+        compact_prefix = "Language-only" if key == "language_base" else prefix
         long_rows = {
             row["key"]: row
             for row in result["profiles"]["context-8192"]["tasks"]["rows"]
@@ -290,10 +332,10 @@ def task_context_deltas(pretrained: dict, random: dict, output: Path) -> None:
                 if row[field] is None or baseline[field] is None:
                     raise ValueError("Context delta requires paired task values")
                 values.append(row[field] - baseline[field])
-            columns[f"{prefix}\n{label}"] = values
+            columns[f"{compact_prefix}\n{label}"] = values
     values = np.asarray(list(columns.values())).T
     limit = max(0.03, float(np.quantile(np.abs(values), 0.98)))
-    figure, axis = plt.subplots(figsize=(8.8, 10.3))
+    figure, axis = plt.subplots(figsize=(4.0 + 1.35 * len(columns), 10.3))
     image = axis.imshow(
         values,
         aspect="auto",
@@ -301,7 +343,7 @@ def task_context_deltas(pretrained: dict, random: dict, output: Path) -> None:
         vmin=-limit,
         vmax=limit,
     )
-    axis.set_xticks(np.arange(len(columns)), list(columns))
+    axis.set_xticks(np.arange(len(columns)), list(columns), fontsize=8)
     axis.set_yticks(np.arange(len(labels)), labels, fontsize=8)
     for row in range(values.shape[0]):
         for column in range(values.shape[1]):
@@ -337,16 +379,24 @@ def task_context_deltas(pretrained: dict, random: dict, output: Path) -> None:
     save(figure, output, "exp582-task-context-deltas")
 
 
-def af_readouts(pretrained: dict, random: dict, historical: dict, output: Path) -> None:
-    figure, axes = plt.subplots(1, 2, figsize=(12.8, 5.4), sharey=True)
+def af_readouts(
+    pretrained: dict,
+    random: dict,
+    historical: dict,
+    output: Path,
+    language_base: dict | None = None,
+) -> None:
+    models = evaluated_models(pretrained, random, language_base)
+    figure, axes = plt.subplots(
+        1, len(models), figsize=(6.4 * len(models), 5.4), sharey=True
+    )
+    axes = np.atleast_1d(axes)
     methods = (
         ("Natural\ncausal suffix", "llr_acgt_avg"),
         ("Full-vocab\ncausal suffix", "llr_full_vocab_avg"),
         ("Target-only\ntwo-sided", "llr_target_poe"),
     )
-    for axis, (condition, result) in zip(
-        axes, (("Pretrained 1×", pretrained), ("Random 2×", random)), strict=True
-    ):
+    for axis, (_, condition, result, _) in zip(axes, models, strict=True):
         for context, marker, color in (
             ("context-8192", "o", COLORS["pretrained"]),
             ("context-2048", "s", COLORS["poe"]),
@@ -388,7 +438,8 @@ def af_readouts(pretrained: dict, random: dict, historical: dict, output: Path) 
         axis.set_axisbelow(True)
     axes[0].set_ylabel("Spearman correlation with maize AF")
     axes[0].legend(frameon=False, fontsize=8, ncol=2)
-    axes[1].legend(frameon=False, fontsize=8)
+    for axis in axes[1:]:
+        axis.legend(frameon=False, fontsize=8)
     figure.suptitle(
         "Allele-frequency readout and context sensitivity", fontsize=15, weight="bold"
     )
@@ -409,7 +460,11 @@ def probe_value(result: dict, profile: str, key: str) -> tuple[float, list[float
 
 
 def probe_readouts(
-    pretrained: dict, random: dict, historical_probe: dict, output: Path
+    pretrained: dict,
+    random: dict,
+    historical_probe: dict,
+    output: Path,
+    language_base: dict | None = None,
 ) -> None:
     figure, axes = plt.subplots(1, 2, figsize=(13.2, 5.8), sharey=True)
     keys = (
@@ -420,10 +475,9 @@ def probe_readouts(
     )
     x = np.arange(len(keys))
     for axis, profile in zip(axes, ("context-8192", "context-2048"), strict=True):
-        for condition, result, color, offset in (
-            ("Pretrained 1×", pretrained, COLORS["pretrained"], -0.06),
-            ("Random 2×", random, COLORS["random"], 0.06),
-        ):
+        models = evaluated_models(pretrained, random, language_base)
+        offsets = np.linspace(-0.09, 0.09, len(models))
+        for (_, condition, result, color), offset in zip(models, offsets, strict=True):
             values, lower, upper = [], [], []
             for _, key in keys:
                 value, interval = probe_value(result, profile, key)
@@ -477,16 +531,23 @@ def probe_readouts(
     save(figure, output, "exp582-probe-readouts")
 
 
-def intrinsic_methods(pretrained: dict, random: dict, output: Path) -> None:
-    figure, axes = plt.subplots(1, 2, figsize=(12.5, 5.2), sharey=True)
+def intrinsic_methods(
+    pretrained: dict,
+    random: dict,
+    output: Path,
+    language_base: dict | None = None,
+) -> None:
+    models = evaluated_models(pretrained, random, language_base)
+    figure, axes = plt.subplots(
+        1, len(models), figsize=(6.25 * len(models), 5.2), sharey=False
+    )
+    axes = np.atleast_1d(axes)
     methods = (
         ("Forward", "left_test", "#0F766E"),
         ("Reverse complement", "right_test", "#EA580C"),
         ("Equal two-sided", "poe_equal_test", COLORS["poe"]),
     )
-    for axis, (condition, report) in zip(
-        axes, (("Pretrained 1×", pretrained), ("Random 2×", random)), strict=True
-    ):
+    for axis, (_, condition, report, _) in zip(axes, models, strict=True):
         sweep = report["intrinsic"]["context_sweep"]
         contexts = sorted(map(int, sweep))
         for label, key, color in methods:
@@ -498,13 +559,20 @@ def intrinsic_methods(pretrained: dict, random: dict, output: Path) -> None:
                 color=color,
                 label=label,
             )
+        axis.axhline(
+            np.log(4),
+            color="#64748B",
+            linestyle=":",
+            linewidth=1.3,
+            label="Uniform-base chance",
+        )
         axis.set_xscale("log", base=2)
         axis.set_xticks(contexts, [f"{value:,}" for value in contexts])
         axis.set_xlabel("One-sided context (bases)")
         axis.set_title(condition, weight="bold")
         axis.grid(alpha=0.2)
     axes[0].set_ylabel("Held-out nucleotide NLL (lower is better)")
-    axes[1].legend(frameon=False, fontsize=8)
+    axes[-1].legend(frameon=False, fontsize=8)
     figure.suptitle(
         "Task-independent bidirectional inference validation",
         fontsize=15,
@@ -521,13 +589,20 @@ def intrinsic_methods(pretrained: dict, random: dict, output: Path) -> None:
     save(figure, output, "exp582-intrinsic-methods")
 
 
-def prompt_methods(pretrained: dict, random: dict, output: Path) -> None:
-    figure, axes = plt.subplots(1, 2, figsize=(12.5, 4.8), sharex=True)
+def prompt_methods(
+    pretrained: dict,
+    random: dict,
+    output: Path,
+    language_base: dict | None = None,
+) -> None:
+    models = evaluated_models(pretrained, random, language_base)
+    figure, axes = plt.subplots(
+        1, len(models), figsize=(6.25 * len(models), 4.8), sharex=True
+    )
+    axes = np.atleast_1d(axes)
     labels = ("Forward", "Reverse comp.", "Two-sided PoE", "Rotated", "Sandwich")
     colors = ("#0F766E", "#EA580C", COLORS["poe"], "#0284C7", "#BE123C")
-    for axis, (condition, report) in zip(
-        axes, (("Pretrained 1×", pretrained), ("Random 2×", random)), strict=True
-    ):
+    for axis, (_, condition, report, _) in zip(axes, models, strict=True):
         intrinsic = report["intrinsic"]
         context = intrinsic["context_sweep"]["2048"]
         prompts = intrinsic["prompt_methods_2048"]
@@ -545,11 +620,12 @@ def prompt_methods(pretrained: dict, random: dict, output: Path) -> None:
         axis.set_title(condition, weight="bold")
         axis.grid(axis="x", alpha=0.2)
         axis.set_axisbelow(True)
+        axis.axvline(np.log(4), color="#64748B", linestyle=":", linewidth=1.3, zorder=0)
         for row, value in enumerate(values):
             axis.text(value + 0.035, row, f"{value:.3f}", va="center", fontsize=8)
     axes[0].set_xlim(0.95, max(axis.get_xlim()[1] for axis in axes) + 0.25)
-    axes[0].set_xlabel("Held-out nucleotide NLL (lower is better)")
-    axes[1].set_xlabel("Held-out nucleotide NLL (lower is better)")
+    for axis in axes:
+        axis.set_xlabel("Held-out nucleotide NLL (lower is better)")
     figure.suptitle(
         "Inference-only bidirectional prompt alternatives at 2,048 bases",
         fontsize=15,
@@ -559,7 +635,7 @@ def prompt_methods(pretrained: dict, random: dict, output: Path) -> None:
     figure.text(
         0.5,
         0.025,
-        "Equal two-sided scores separate forward and reverse-complement passes; rotated and sandwich prompts concatenate flanks into one causal pass.",
+        "The dotted line marks uniform-base chance. Equal two-sided scores use separate forward and reverse-complement passes; rotated and sandwich prompts use one causal pass.",
         ha="center",
         fontsize=8.5,
         color="#475569",
@@ -574,27 +650,40 @@ def create_report(
     random_method: Path,
     historical: Path,
     output: Path,
+    language_base: Path | None = None,
+    language_base_method: Path | None = None,
 ) -> None:
+    if (language_base is None) != (language_base_method is None):
+        raise ValueError("Language-base result and method report must be paired")
     pretrained_result = load(pretrained / "result.json")
     random_result = load(random / "result.json")
+    language_base_result = (
+        load(language_base / "result.json") if language_base is not None else None
+    )
     history = load(historical / "exp472-lr5e4-full-coreweave-20260831.json")
     af_history = {
         rung: load(historical / f"plantcad2-maize-af-{rung}-20260904-v1.json")
         for rung in ("022t", "039t", "056t")
     }
-    model_overview(pretrained_result, random_result, history, output)
-    task_heatmap(pretrained_result, random_result, history, output)
-    task_context_deltas(pretrained_result, random_result, output)
-    af_readouts(pretrained_result, random_result, af_history, output)
+    model_overview(
+        pretrained_result, random_result, history, output, language_base_result
+    )
+    task_heatmap(
+        pretrained_result, random_result, history, output, language_base_result
+    )
+    task_context_deltas(pretrained_result, random_result, output, language_base_result)
+    af_readouts(
+        pretrained_result, random_result, af_history, output, language_base_result
+    )
+    directories = [("pretrained", pretrained), ("random", random)]
+    if language_base is not None:
+        directories.append(("language_base", language_base))
     probe_paths = {
         condition: {
             profile: directory / profile / "probes/result.json"
             for profile in ("context-8192", "context-2048")
         }
-        for condition, directory in (
-            ("pretrained", pretrained),
-            ("random", random),
-        )
+        for condition, directory in directories
     }
     present = [
         path.exists() for paths in probe_paths.values() for path in paths.values()
@@ -609,11 +698,30 @@ def create_report(
             condition: {profile: load(path) for profile, path in paths.items()}
             for condition, paths in probe_paths.items()
         }
-        probe_readouts(probes["pretrained"], probes["random"], probe_history, output)
+        probe_readouts(
+            probes["pretrained"],
+            probes["random"],
+            probe_history,
+            output,
+            probes.get("language_base"),
+        )
     pretrained_method_report = load(pretrained_method)
     random_method_report = load(random_method)
-    intrinsic_methods(pretrained_method_report, random_method_report, output)
-    prompt_methods(pretrained_method_report, random_method_report, output)
+    language_base_method_report = (
+        load(language_base_method) if language_base_method is not None else None
+    )
+    intrinsic_methods(
+        pretrained_method_report,
+        random_method_report,
+        output,
+        language_base_method_report,
+    )
+    prompt_methods(
+        pretrained_method_report,
+        random_method_report,
+        output,
+        language_base_method_report,
+    )
 
 
 def main() -> None:
@@ -622,6 +730,8 @@ def main() -> None:
     parser.add_argument("--random", type=Path, required=True)
     parser.add_argument("--pretrained-method", type=Path, required=True)
     parser.add_argument("--random-method", type=Path, required=True)
+    parser.add_argument("--language-base", type=Path)
+    parser.add_argument("--language-base-method", type=Path)
     parser.add_argument("--historical", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     create_report(**vars(parser.parse_args()))

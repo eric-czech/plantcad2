@@ -1,6 +1,8 @@
 {
   "analysis_prefix": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/evaluations/final-v1/analysis/random-lrm2-seed0",
   "analysis_wheel_sha256": "ae5062da2a55d1631d92dddc8af8e1ab7b8137e96c45fb9d5e4e0561083efb06",
+  "checkpoint_role": "dna-trained",
+  "condition": "random",
   "probes_included": false,
   "receipt_sha256": "2395d77f5928494fbb4597d1c76ffa389e679336a77790b4fa80cabd419848ee",
   "receipt_uri": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/evaluations/final-v1/analysis/random-lrm2-seed0/receipt.json",

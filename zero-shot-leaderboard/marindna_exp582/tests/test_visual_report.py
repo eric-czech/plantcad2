@@ -83,7 +83,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
         }
     }
     conditions = {}
-    for name in ("pretrained", "random"):
+    for name in ("pretrained", "random", "language_base"):
         directory = tmp_path / name
         write(directory / "result.json", result)
         for profile in ("context-8192", "context-2048"):
@@ -107,8 +107,10 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
     }
     pretrained_method = tmp_path / "pretrained-method.json"
     random_method = tmp_path / "random-method.json"
+    language_base_method = tmp_path / "language-base-method.json"
     write(pretrained_method, method)
     write(random_method, method)
+    write(language_base_method, method)
     output = tmp_path / "assets"
     create_report(
         conditions["pretrained"],
@@ -117,6 +119,8 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
         random_method,
         historical,
         output,
+        conditions["language_base"],
+        language_base_method,
     )
     names = (
         "exp582-model-family-overview",
@@ -142,6 +146,8 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
         random_method,
         historical,
         without_probes,
+        conditions["language_base"],
+        language_base_method,
     )
     assert not (without_probes / "exp582-probe-readouts.png").exists()
     assert (without_probes / "exp582-model-family-overview.png").exists()

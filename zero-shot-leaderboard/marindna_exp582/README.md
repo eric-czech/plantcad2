@@ -1,8 +1,7 @@
 # MarinDNA exp582 evaluations
 
-Compare the d1536 pretrained and random MoE conditions from [MarinDNA #582](https://github.com/Open-Athena/marin-dna/issues/582) with the existing exp472 dense results.
-Report the original 20 tasks, maize allele-frequency scoring, and inference-only bidirectional methods first.
-Frozen whole-window and variant-token probes will be added separately after the initial results are reviewed.
+Compare the d1536 pretrained and random MoE conditions from [MarinDNA #582](https://github.com/Open-Athena/marin-dna/issues/582) with the existing exp472 dense results and the original d1536 language checkpoint as a no-DNA-training control.
+The [final report](runs/exp582-final/README.md) covers the original 20 tasks, maize allele-frequency scoring, frozen probes, and inference-only bidirectional methods.
 
 The `historical/` artifacts are unchanged copies of previous computations, with source revisions and SHA-256 hashes in its two manifests.
 No dense-model computation is rerun; every historical comparison is read from archived results.
@@ -13,7 +12,7 @@ uv run --locked --extra cpu pytest
 uv run --locked --extra cpu python -m exp582_evals.historical .
 ```
 
-MoE scoring and embedding adapters are being validated before any production evaluation.
+MoE scoring and embedding adapters were validated before the full evaluation.
 Both conditions now encode one token per DNA character: pretrained uses its original language vocabulary IDs, and scratch uses the reduced DNA vocabulary.
 The training project supplies the lowercase character tokenizer; its original BPE tokenizer remains available separately for future text evaluations.
 Candidate scoring uses the four A/C/G/T output-logit softmax for these encodings.

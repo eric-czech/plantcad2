@@ -1,6 +1,8 @@
 {
   "analysis_prefix": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/evaluations/final-v1/probes/pretrained-lrm1-seed0",
   "analysis_wheel_sha256": "ae5062da2a55d1631d92dddc8af8e1ab7b8137e96c45fb9d5e4e0561083efb06",
+  "checkpoint_role": "dna-trained",
+  "condition": "pretrained",
   "receipt_sha256": "6080ff88d84804533f9c19dc24000c8b9f164d98ad72572312161ccc4c6cecac",
   "receipt_uri": "s3://marin-us-east-02a/MarinDNA/exp582_plantcad2_moe/evaluations/final-v1/probes/pretrained-lrm1-seed0/receipt.json",
   "reduced_analysis": {

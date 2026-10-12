@@ -12,6 +12,8 @@ matplotlib.use("Agg")
 import numpy as np
 from matplotlib import pyplot as plt
 
+from exp586_evals.historical import verify_exp582_results
+
 COLORS = {
     "dense": "#64748B",
     "published": "#94A3B8",
@@ -404,16 +406,18 @@ def af_readouts(
     output: Path,
 ) -> None:
     models = selected(models, "af")
-    figure, axes = plt.subplots(
-        1, len(models), figsize=(6.4 * len(models), 5.4), sharey=True
+    columns = min(2, len(models))
+    rows = int(np.ceil(len(models) / columns))
+    figure, grid = plt.subplots(
+        rows, columns, figsize=(6.6 * columns, 5.1 * rows), sharey=True, squeeze=False
     )
-    axes = np.atleast_1d(axes)
+    axes = grid.ravel()
     methods = (
         ("Natural\ncausal suffix", "llr_acgt_avg"),
         ("Full-vocab\ncausal suffix", "llr_full_vocab_avg"),
         ("Target-only\ntwo-sided", "llr_target_poe"),
     )
-    for axis, model in zip(axes, models, strict=True):
+    for axis, model in zip(axes[: len(models)], models, strict=True):
         result = model.result
         for context, marker, color in (
             ("context-8192", "o", model.color),
@@ -454,10 +458,14 @@ def af_readouts(
         axis.set_title(model.label, weight="bold")
         axis.grid(axis="y", alpha=0.2)
         axis.set_axisbelow(True)
-    axes[0].set_ylabel("Spearman correlation with maize AF")
+    for index, axis in enumerate(axes[: len(models)]):
+        if index % columns == 0:
+            axis.set_ylabel("Spearman correlation with maize AF")
     axes[0].legend(frameon=False, fontsize=8, ncol=2)
-    for axis in axes[1:]:
+    for axis in axes[1 : len(models)]:
         axis.legend(frameon=False, fontsize=8)
+    for axis in axes[len(models) :]:
+        axis.remove()
     figure.suptitle(
         "Allele-frequency readout and context sensitivity", fontsize=15, weight="bold"
     )
@@ -671,6 +679,7 @@ def create_report(
     historical: Path,
     output: Path,
 ) -> None:
+    verify_exp582_results(historical.parent)
     models = load_catalog(catalog)
     history = load(historical / "exp472-lr5e4-full-coreweave-20260831.json")
     af_history = {

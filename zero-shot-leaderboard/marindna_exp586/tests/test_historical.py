@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from exp586_evals.historical import dense_results
+from exp586_evals.historical import dense_results, verify_exp582_results
 
 
 def test_archived_dense_results_are_complete_and_reproduce_published_aggregates():
@@ -19,3 +19,10 @@ def test_archived_dense_results_are_complete_and_reproduce_published_aggregates(
             "test": 28378,
             "dropped_overlap": 132,
         }
+
+
+def test_archived_exp582_results_match_their_source_manifest():
+    root = Path(__file__).resolve().parents[1]
+    manifest = verify_exp582_results(root)
+    assert manifest["source_commit"] == "92365ad509f56be730b67923c32285e8262a20ee"
+    assert len(manifest["files"]) == 19

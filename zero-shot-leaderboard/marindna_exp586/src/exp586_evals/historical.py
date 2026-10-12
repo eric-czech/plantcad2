@@ -7,6 +7,22 @@ from pathlib import Path
 from statistics import mean
 
 
+def verify_exp582_results(root: Path) -> dict:
+    """Verify the copied exp582 comparison artifacts without recomputing them."""
+    archive = root / "historical" / "exp582-final"
+    manifest = json.loads((archive / "manifest.json").read_text())
+    if manifest.get("schema") != 1:
+        raise ValueError("Unsupported exp582 historical manifest")
+    for relative, record in manifest["files"].items():
+        path = archive / relative
+        payload = path.read_bytes()
+        if len(payload) != record["bytes"]:
+            raise ValueError(f"Historical exp582 artifact size changed: {path}")
+        if hashlib.sha256(payload).hexdigest() != record["sha256"]:
+            raise ValueError(f"Historical exp582 artifact changed: {path}")
+    return manifest
+
+
 def dense_results(root: Path) -> dict:
     """Verify provenance and assemble the three historical token budgets."""
     archive = root / "historical"

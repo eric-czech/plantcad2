@@ -11,6 +11,45 @@ from exp586_evals.artifacts import collect
 from exp586_evals.protocol import original
 
 
+def legacy_af_chunks(
+    plan: list[dict], source: Path, output: Path, prediction_columns: tuple[str, ...]
+) -> list[tuple[dict, Path]]:
+    """Project richer native AF chunks onto the original PR20 reducer schema."""
+    output.mkdir(parents=True, exist_ok=True)
+    required = {"row_id", *prediction_columns, "target_probs_fwd", "target_probs_rc"}
+    chunks = []
+    for metadata in plan:
+        source_path = source / f"{metadata['key']}.npz"
+        with np.load(source_path, allow_pickle=False) as archive:
+            if not required.issubset(archive.files):
+                missing = sorted(required.difference(archive.files))
+                raise RuntimeError(
+                    f"Native AF chunk {source_path.name} is missing {missing}"
+                )
+            values = {name: archive[name] for name in ("row_id", *prediction_columns)}
+            target_probabilities = [
+                archive[name] for name in ("target_probs_fwd", "target_probs_rc")
+            ]
+        rows = metadata["stop"] - metadata["start"]
+        if any(
+            len(value) != rows for value in [*values.values(), *target_probabilities]
+        ):
+            raise RuntimeError(
+                f"Native AF chunk {source_path.name} has wrong row count"
+            )
+        if any(
+            probabilities.shape != (rows, 4) or not np.isfinite(probabilities).all()
+            for probabilities in target_probabilities
+        ):
+            raise RuntimeError(
+                f"Native AF chunk {source_path.name} has invalid target probabilities"
+            )
+        output_path = output / source_path.name
+        np.savez_compressed(output_path, **values)
+        chunks.append((metadata, output_path))
+    return chunks
+
+
 def score(
     preparation_path: Path, directory: Path, condition: str, checkpoint_digest: str
 ) -> dict:
@@ -48,7 +87,12 @@ def score(
     )
     af_root = directory / "af"
     union = preparation_path.parent / "maize-af.parquet"
-    chunks = [(c, af_root / "chunks" / f"{c['key']}.npz") for c in prep["af_plan"]]
+    chunks = legacy_af_chunks(
+        prep["af_plan"],
+        af_root / "chunks",
+        af_root / "legacy-chunks",
+        protocol.af_aggregate.PREDICTION_COLUMNS,
+    )
     af = protocol.af_aggregate.aggregate(
         af_root, union, prep["af_plan"], chunks, only_sample_size=2112
     )

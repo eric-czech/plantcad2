@@ -13,6 +13,7 @@ from tokenizers import Tokenizer, models, normalizers, pre_tokenizers
 from exp586_evals.full_data import assign_task_files, task_plan
 from exp586_evals.native import NativeAdapter, _center_crop
 from exp586_evals.protocol import original
+from exp586_evals.real_metrics import legacy_af_chunks
 
 
 def tokenizer():
@@ -98,6 +99,30 @@ def test_original_af_reduction_suffix_and_ambiguity():
     actual = p.af.reduce_uncached(acgt, acgt, valid, 2)
     # Earlier prefix cancels, ambiguous targets excluded only from ACGT score.
     np.testing.assert_array_equal(actual.numpy(), [[4.0, 6.0, 1.0]])
+
+
+def test_legacy_af_chunks_project_richer_native_schema(tmp_path):
+    columns = ("llr_acgt_fwd", "llr_acgt_rc")
+    source = tmp_path / "native"
+    source.mkdir()
+    np.savez_compressed(
+        source / "chunk.npz",
+        row_id=np.array([3, 4]),
+        llr_acgt_fwd=np.array([0.1, 0.2]),
+        llr_acgt_rc=np.array([0.3, 0.4]),
+        target_probs_fwd=np.full((2, 4), 0.25),
+        target_probs_rc=np.full((2, 4), 0.25),
+    )
+    chunks = legacy_af_chunks(
+        [{"key": "chunk", "start": 0, "stop": 2, "worker": 0}],
+        source,
+        tmp_path / "legacy",
+        columns,
+    )
+    assert len(chunks) == 1
+    with np.load(chunks[0][1], allow_pickle=False) as archive:
+        assert set(archive.files) == {"row_id", *columns}
+        np.testing.assert_array_equal(archive["row_id"], [3, 4])
 
 
 def test_full_plan_preserves_task_locality_and_exact_coverage():

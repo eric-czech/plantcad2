@@ -1,6 +1,7 @@
 """Create the publication figures used in the exp586 PR results report."""
 
 import argparse
+import dataclasses
 import json
 from pathlib import Path
 
@@ -12,13 +13,61 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 COLORS = {
-    "pretrained": "#2A9D8F",
-    "random": "#E76F51",
-    "language_base": "#7C3AED",
     "dense": "#64748B",
     "published": "#94A3B8",
     "poe": "#6D5BD0",
 }
+
+
+@dataclasses.dataclass(frozen=True)
+class Model:
+    key: str
+    label: str
+    directory: Path
+    color: str
+    views: frozenset[str]
+    result: dict
+    method: dict | None
+
+
+def load_catalog(path: Path) -> list[Model]:
+    payload = load(path)
+    if payload.get("schema") != 1 or not payload.get("models"):
+        raise ValueError("The model catalog must use schema 1 and contain models")
+    models = []
+    for item in payload["models"]:
+        directory = (path.parent / item["result"]).resolve()
+        method_path = (
+            (path.parent / item["method"]).resolve() if item.get("method") else None
+        )
+        views = frozenset(item["views"])
+        if not (directory / "result.json").is_file():
+            raise ValueError(f"Missing result for {item['key']}: {directory}")
+        if "methods" in views and (method_path is None or not method_path.is_file()):
+            raise ValueError(f"Missing method report for {item['key']}")
+        models.append(
+            Model(
+                key=item["key"],
+                label=item["label"],
+                directory=directory,
+                color=item["color"],
+                views=views,
+                result=load(directory / "result.json"),
+                method=load(method_path) if method_path is not None else None,
+            )
+        )
+    if len({model.key for model in models}) != len(models):
+        raise ValueError("Model catalog keys must be unique")
+    if len({model.label for model in models}) != len(models):
+        raise ValueError("Model catalog labels must be unique")
+    return models
+
+
+def selected(models: list[Model], view: str) -> list[Model]:
+    values = [model for model in models if view in model.views]
+    if not values:
+        raise ValueError(f"Model catalog selects no models for {view}")
+    return values
 CATEGORIES = (
     "Conservation",
     "Masked motif",
@@ -87,30 +136,9 @@ def new_profile(result: dict, profile: str = "context-8192") -> dict:
     return result["profiles"][profile]
 
 
-def evaluated_models(
-    pretrained: dict, random: dict, language_base: dict | None = None
-) -> list[tuple[str, str, dict, str]]:
-    models = [
-        ("pretrained", "Pretrained 1×", pretrained, COLORS["pretrained"]),
-        ("random", "Random 2×", random, COLORS["random"]),
-    ]
-    if language_base is not None:
-        models.append(
-            (
-                "language_base",
-                "Language-only control",
-                language_base,
-                COLORS["language_base"],
-            )
-        )
-    return models
-
-
 def overview_series(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     historical: dict,
-    language_base: dict | None = None,
 ) -> dict[str, list[float]]:
     series = {
         historical["labels"][rung]: historical["groups"][rung]
@@ -118,20 +146,18 @@ def overview_series(
     }
     for label, (_, group_key) in PUBLISHED.items():
         series[label] = historical["published_groups"][group_key]
-    for _, label, result, _ in evaluated_models(pretrained, random, language_base):
-        groups = new_profile(result)["tasks"]["groups"]["natural"]
-        series["MoE " + label.lower()] = [groups[name] for name in CATEGORIES]
+    for model in selected(models, "overview"):
+        groups = new_profile(model.result)["tasks"]["groups"]["natural"]
+        series[model.label] = [groups[name] for name in CATEGORIES]
     return series
 
 
 def model_overview(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     historical: dict,
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
-    series = overview_series(pretrained, random, historical, language_base)
+    series = overview_series(models, historical)
     labels = list(series)
     values = np.asarray([series[label] for label in labels])
     figure, axes = plt.subplots(
@@ -142,10 +168,7 @@ def model_overview(
     )
     composite = values[:, -1]
     order = np.argsort(composite)
-    new_colors = {
-        "MoE " + label.lower(): color
-        for _, label, _, color in evaluated_models(pretrained, random, language_base)
-    }
+    new_colors = {model.label: model.color for model in models}
     colors = [
         new_colors.get(
             label,
@@ -173,17 +196,13 @@ def model_overview(
         "PlantCAD2-Large",
         "PlantCAD2.5-Large",
         "Evo 2 20B",
-        "MoE pretrained 1×",
-        "MoE random 2×",
-    ]
-    if language_base is not None:
-        selected.append("MoE language-only control")
+    ] + [model.label for model in models if "overview_detail" in model.views]
     x = np.arange(4)
     selected_values = []
     for label in selected:
         row = series[label][:-1]
         selected_values.extend(row)
-        emphasized = label.startswith("MoE")
+        emphasized = label in new_colors
         axes[1].plot(
             x,
             row,
@@ -232,11 +251,9 @@ def historical_task_columns(
 
 
 def task_heatmap(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     historical: dict,
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
     labels, historical_columns = historical_task_columns(historical)
     columns = {
@@ -246,17 +263,21 @@ def task_heatmap(
         "PC2.5 Large": historical_columns["PlantCAD2.5-Large"],
         "Evo 2 20B": historical_columns["Evo 2 20B"],
     }
-    for key, prefix, result, _ in evaluated_models(pretrained, random, language_base):
-        compact_prefix = "Language-only" if key == "language_base" else prefix
-        rows = new_profile(result)["tasks"]["rows"]
+    for model in models:
+        methods = []
+        if "task_natural" in model.views:
+            methods.append(("natural", "natural"))
+        if "task_two_sided" in model.views:
+            methods.append(("two-sided", "bidirectional_poe"))
+        if not methods:
+            continue
+        rows = new_profile(model.result)["tasks"]["rows"]
         if [row["key"] for row in rows] != [
             row["key"] for row in historical["results"]["022t"]["rows"]
         ]:
-            raise ValueError(f"New task inventory differs for {prefix}")
-        columns[f"{compact_prefix}\nnatural"] = [row["natural"] for row in rows]
-        columns[f"{compact_prefix}\ntwo-sided"] = [
-            row["bidirectional_poe"] for row in rows
-        ]
+            raise ValueError(f"New task inventory differs for {model.label}")
+        for label, field in methods:
+            columns[f"{model.label}\n{label}"] = [row[field] for row in rows]
     names = list(columns)
     values = np.asarray(
         [
@@ -264,7 +285,7 @@ def task_heatmap(
             for name in names
         ]
     ).T
-    figure, axis = plt.subplots(figsize=(12.6, 10.8))
+    figure, axis = plt.subplots(figsize=(max(12.6, 1.05 * len(names)), 10.8))
     image = axis.imshow(
         values,
         aspect="auto",
@@ -303,15 +324,13 @@ def task_heatmap(
 
 
 def task_context_deltas(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
     columns = {}
     labels = None
-    for key, prefix, result, _ in evaluated_models(pretrained, random, language_base):
-        compact_prefix = "Language-only" if key == "language_base" else prefix
+    for model in selected(models, "context"):
+        result = model.result
         long_rows = {
             row["key"]: row
             for row in result["profiles"]["context-8192"]["tasks"]["rows"]
@@ -332,7 +351,7 @@ def task_context_deltas(
                 if row[field] is None or baseline[field] is None:
                     raise ValueError("Context delta requires paired task values")
                 values.append(row[field] - baseline[field])
-            columns[f"{compact_prefix}\n{label}"] = values
+            columns[f"{model.label}\n{label}"] = values
     values = np.asarray(list(columns.values())).T
     limit = max(0.03, float(np.quantile(np.abs(values), 0.98)))
     figure, axis = plt.subplots(figsize=(4.0 + 1.35 * len(columns), 10.3))
@@ -380,13 +399,11 @@ def task_context_deltas(
 
 
 def af_readouts(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     historical: dict,
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
-    models = evaluated_models(pretrained, random, language_base)
+    models = selected(models, "af")
     figure, axes = plt.subplots(
         1, len(models), figsize=(6.4 * len(models), 5.4), sharey=True
     )
@@ -396,9 +413,10 @@ def af_readouts(
         ("Full-vocab\ncausal suffix", "llr_full_vocab_avg"),
         ("Target-only\ntwo-sided", "llr_target_poe"),
     )
-    for axis, (_, condition, result, _) in zip(axes, models, strict=True):
+    for axis, model in zip(axes, models, strict=True):
+        result = model.result
         for context, marker, color in (
-            ("context-8192", "o", COLORS["pretrained"]),
+            ("context-8192", "o", model.color),
             ("context-2048", "s", COLORS["poe"]),
         ):
             metrics = result["profiles"][context]["allele_frequency"]["scores"]
@@ -433,7 +451,7 @@ def af_readouts(
                 label=f"{label} (legacy 10k)" if axis is axes[0] else None,
             )
         axis.set_xticks(np.arange(len(methods)), [label for label, _ in methods])
-        axis.set_title(condition, weight="bold")
+        axis.set_title(model.label, weight="bold")
         axis.grid(axis="y", alpha=0.2)
         axis.set_axisbelow(True)
     axes[0].set_ylabel("Spearman correlation with maize AF")
@@ -446,7 +464,7 @@ def af_readouts(
     figure.text(
         0.5,
         0.01,
-        "All new values use the fixed 94,075-variant split; dense reference lines are prior 8,192-token results on the same split.",
+        "All model values use the fixed 94,075-variant split; dense reference lines are prior 8,192-token results on the same split.",
         ha="center",
         fontsize=8.5,
         color="#475569",
@@ -460,12 +478,18 @@ def probe_value(result: dict, profile: str, key: str) -> tuple[float, list[float
 
 
 def probe_readouts(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     historical_probe: dict,
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
+    models = selected(models, "probes")
+    probe_results = {
+        model.key: {
+            profile: load(model.directory / profile / "probes/result.json")
+            for profile in ("context-8192", "context-2048")
+        }
+        for model in models
+    }
     figure, axes = plt.subplots(1, 2, figsize=(13.2, 5.8), sharey=True)
     keys = (
         ("Whole\naveraged", "whole_window/strand_average"),
@@ -475,12 +499,11 @@ def probe_readouts(
     )
     x = np.arange(len(keys))
     for axis, profile in zip(axes, ("context-8192", "context-2048"), strict=True):
-        models = evaluated_models(pretrained, random, language_base)
         offsets = np.linspace(-0.09, 0.09, len(models))
-        for (_, condition, result, color), offset in zip(models, offsets, strict=True):
+        for model, offset in zip(models, offsets, strict=True):
             values, lower, upper = [], [], []
             for _, key in keys:
-                value, interval = probe_value(result, profile, key)
+                value, interval = probe_value(probe_results[model.key], profile, key)
                 values.append(value)
                 lower.append(value - interval[0])
                 upper.append(interval[1] - value)
@@ -491,8 +514,8 @@ def probe_readouts(
                 marker="o",
                 capsize=3,
                 linewidth=1.8,
-                color=color,
-                label=condition,
+                color=model.color,
+                label=model.label,
             )
         if profile == "context-8192":
             for rung, style in zip(
@@ -532,12 +555,10 @@ def probe_readouts(
 
 
 def intrinsic_methods(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
-    models = evaluated_models(pretrained, random, language_base)
+    models = selected(models, "methods")
     figure, axes = plt.subplots(
         1, len(models), figsize=(6.25 * len(models), 5.2), sharey=False
     )
@@ -547,7 +568,9 @@ def intrinsic_methods(
         ("Reverse complement", "right_test", "#EA580C"),
         ("Equal two-sided", "poe_equal_test", COLORS["poe"]),
     )
-    for axis, (_, condition, report, _) in zip(axes, models, strict=True):
+    for axis, model in zip(axes, models, strict=True):
+        report = model.method
+        assert report is not None
         sweep = report["intrinsic"]["context_sweep"]
         contexts = sorted(map(int, sweep))
         for label, key, color in methods:
@@ -569,7 +592,7 @@ def intrinsic_methods(
         axis.set_xscale("log", base=2)
         axis.set_xticks(contexts, [f"{value:,}" for value in contexts])
         axis.set_xlabel("One-sided context (bases)")
-        axis.set_title(condition, weight="bold")
+        axis.set_title(model.label, weight="bold")
         axis.grid(alpha=0.2)
     axes[0].set_ylabel("Held-out nucleotide NLL (lower is better)")
     axes[-1].legend(frameon=False, fontsize=8)
@@ -590,19 +613,19 @@ def intrinsic_methods(
 
 
 def prompt_methods(
-    pretrained: dict,
-    random: dict,
+    models: list[Model],
     output: Path,
-    language_base: dict | None = None,
 ) -> None:
-    models = evaluated_models(pretrained, random, language_base)
+    models = selected(models, "methods")
     figure, axes = plt.subplots(
         1, len(models), figsize=(6.25 * len(models), 4.8), sharex=True
     )
     axes = np.atleast_1d(axes)
     labels = ("Forward", "Reverse comp.", "Two-sided PoE", "Rotated", "Sandwich")
     colors = ("#0F766E", "#EA580C", COLORS["poe"], "#0284C7", "#BE123C")
-    for axis, (_, condition, report, _) in zip(axes, models, strict=True):
+    for axis, model in zip(axes, models, strict=True):
+        report = model.method
+        assert report is not None
         intrinsic = report["intrinsic"]
         context = intrinsic["context_sweep"]["2048"]
         prompts = intrinsic["prompt_methods_2048"]
@@ -617,7 +640,7 @@ def prompt_methods(
         axis.barh(y, values, color=colors, alpha=0.9)
         axis.set_yticks(y, labels)
         axis.invert_yaxis()
-        axis.set_title(condition, weight="bold")
+        axis.set_title(model.label, weight="bold")
         axis.grid(axis="x", alpha=0.2)
         axis.set_axisbelow(True)
         axis.axvline(np.log(4), color="#64748B", linestyle=":", linewidth=1.3, zorder=0)
@@ -644,94 +667,41 @@ def prompt_methods(
 
 
 def create_report(
-    pretrained: Path,
-    random: Path,
-    pretrained_method: Path,
-    random_method: Path,
+    catalog: Path,
     historical: Path,
     output: Path,
-    language_base: Path | None = None,
-    language_base_method: Path | None = None,
 ) -> None:
-    if (language_base is None) != (language_base_method is None):
-        raise ValueError("Language-base result and method report must be paired")
-    pretrained_result = load(pretrained / "result.json")
-    random_result = load(random / "result.json")
-    language_base_result = (
-        load(language_base / "result.json") if language_base is not None else None
-    )
+    models = load_catalog(catalog)
     history = load(historical / "exp472-lr5e4-full-coreweave-20260831.json")
     af_history = {
         rung: load(historical / f"plantcad2-maize-af-{rung}-20260904-v1.json")
         for rung in ("022t", "039t", "056t")
     }
-    model_overview(
-        pretrained_result, random_result, history, output, language_base_result
-    )
-    task_heatmap(
-        pretrained_result, random_result, history, output, language_base_result
-    )
-    task_context_deltas(pretrained_result, random_result, output, language_base_result)
-    af_readouts(
-        pretrained_result, random_result, af_history, output, language_base_result
-    )
-    directories = [("pretrained", pretrained), ("random", random)]
-    if language_base is not None:
-        directories.append(("language_base", language_base))
-    probe_paths = {
-        condition: {
-            profile: directory / profile / "probes/result.json"
-            for profile in ("context-8192", "context-2048")
-        }
-        for condition, directory in directories
-    }
-    present = [
-        path.exists() for paths in probe_paths.values() for path in paths.values()
+    model_overview(models, history, output)
+    task_heatmap(models, history, output)
+    task_context_deltas(models, output)
+    af_readouts(models, af_history, output)
+    probe_models = selected(models, "probes")
+    probe_paths = [
+        model.directory / profile / "probes/result.json"
+        for model in probe_models
+        for profile in ("context-8192", "context-2048")
     ]
+    present = [path.exists() for path in probe_paths]
     if any(present) and not all(present):
         raise ValueError("Probe results must be either complete or absent")
     if all(present):
         probe_history = load(
             historical / "exp472-lr5e4-maize-af-probe-validation-20260904.json"
         )
-        probes = {
-            condition: {profile: load(path) for profile, path in paths.items()}
-            for condition, paths in probe_paths.items()
-        }
-        probe_readouts(
-            probes["pretrained"],
-            probes["random"],
-            probe_history,
-            output,
-            probes.get("language_base"),
-        )
-    pretrained_method_report = load(pretrained_method)
-    random_method_report = load(random_method)
-    language_base_method_report = (
-        load(language_base_method) if language_base_method is not None else None
-    )
-    intrinsic_methods(
-        pretrained_method_report,
-        random_method_report,
-        output,
-        language_base_method_report,
-    )
-    prompt_methods(
-        pretrained_method_report,
-        random_method_report,
-        output,
-        language_base_method_report,
-    )
+        probe_readouts(models, probe_history, output)
+    intrinsic_methods(models, output)
+    prompt_methods(models, output)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pretrained", type=Path, required=True)
-    parser.add_argument("--random", type=Path, required=True)
-    parser.add_argument("--pretrained-method", type=Path, required=True)
-    parser.add_argument("--random-method", type=Path, required=True)
-    parser.add_argument("--language-base", type=Path)
-    parser.add_argument("--language-base-method", type=Path)
+    parser.add_argument("--catalog", type=Path, required=True)
     parser.add_argument("--historical", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     create_report(**vars(parser.parse_args()))

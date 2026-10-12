@@ -10,7 +10,14 @@ The task catalog, genomic memberships, reference assembly, and evaluation formul
 ```bash
 uv run --locked --extra cpu pytest
 uv run --locked --extra cpu python -m exp586_evals.historical .
+uv run --locked --extra cpu python -m exp586_evals.visual_report \
+  --catalog runs/exp586-final/catalog.json \
+  --historical historical \
+  --output runs/exp586-final/assets
 ```
+
+The report catalog controls which current and archived models appear in each figure.
+Adding a later exp586 checkpoint requires a new catalog entry rather than changing plotting code.
 
 The scratch d768 model uses the historical eight-entry DNA tokenizer with one token per nucleotide.
 A/C/G/T candidate scoring therefore projects the four corresponding output logits directly.

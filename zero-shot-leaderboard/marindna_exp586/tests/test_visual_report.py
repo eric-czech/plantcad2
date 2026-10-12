@@ -106,22 +106,56 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
         }
     }
     pretrained_method = tmp_path / "pretrained-method.json"
-    random_method = tmp_path / "random-method.json"
-    language_base_method = tmp_path / "language-base-method.json"
     write(pretrained_method, method)
-    write(random_method, method)
-    write(language_base_method, method)
-    output = tmp_path / "assets"
-    create_report(
-        conditions["pretrained"],
-        conditions["random"],
-        pretrained_method,
-        random_method,
-        historical,
-        output,
-        conditions["language_base"],
-        language_base_method,
+    catalog = tmp_path / "catalog.json"
+    write(
+        catalog,
+        {
+            "schema": 1,
+            "models": [
+                {
+                    "key": "d768-scratch-lrm1",
+                    "label": "d768 scratch 1×",
+                    "result": "pretrained",
+                    "method": "pretrained-method.json",
+                    "color": "#0F766E",
+                    "views": [
+                        "overview",
+                        "overview_detail",
+                        "task_natural",
+                        "task_two_sided",
+                        "context",
+                        "af",
+                        "probes",
+                        "methods",
+                    ],
+                },
+                {
+                    "key": "d1536-pretrained",
+                    "label": "d1536 pretrained 1×",
+                    "result": "random",
+                    "color": "#2563EB",
+                    "views": [
+                        "overview",
+                        "overview_detail",
+                        "task_natural",
+                        "task_two_sided",
+                        "af",
+                        "probes",
+                    ],
+                },
+                {
+                    "key": "d1536-language-base",
+                    "label": "d1536 language-only",
+                    "result": "language_base",
+                    "color": "#7C3AED",
+                    "views": ["overview", "task_natural", "af", "probes"],
+                },
+            ],
+        },
     )
+    output = tmp_path / "assets"
+    create_report(catalog, historical, output)
     names = (
         "exp586-model-family-overview",
         "exp586-task-heatmap",
@@ -139,15 +173,6 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
         for profile in ("context-8192", "context-2048"):
             (directory / profile / "probes/result.json").unlink()
     without_probes = tmp_path / "assets-without-probes"
-    create_report(
-        conditions["pretrained"],
-        conditions["random"],
-        pretrained_method,
-        random_method,
-        historical,
-        without_probes,
-        conditions["language_base"],
-        language_base_method,
-    )
+    create_report(catalog, historical, without_probes)
     assert not (without_probes / "exp586-probe-readouts.png").exists()
     assert (without_probes / "exp586-model-family-overview.png").exists()

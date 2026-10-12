@@ -3,7 +3,7 @@
   "models": [
     {
       "key": "d768-scratch-lrm1-seed0",
-      "label": "d768 scratch 1×",
+      "label": "MarinMoE 1.5B-60M 0.22T (scratch, 1× LR)",
       "result": "scratch-lrm1-seed0",
       "method": "methods/scratch-lrm1-seed0.json",
       "color": "#0F766E",
@@ -11,7 +11,6 @@
         "overview",
         "overview_detail",
         "task_natural",
-        "task_two_sided",
         "context",
         "af",
         "probes",
@@ -20,40 +19,30 @@
     },
     {
       "key": "d1536-pretrained-lrm1-seed0",
-      "label": "d1536 pretrained 1×",
+      "label": "MarinMoE 11.5B-481M 0.01T (pretrained, 1× LR)",
       "result": "../../historical/exp582-final/pretrained",
       "color": "#2563EB",
       "views": [
-        "overview",
-        "overview_detail",
-        "task_natural",
-        "task_two_sided",
         "af",
         "probes"
       ]
     },
     {
       "key": "d1536-random-lrm2-seed0",
-      "label": "d1536 random 2×",
+      "label": "MarinMoE 11.5B-481M 0.01T (scratch, 2× LR)",
       "result": "../../historical/exp582-final/random",
       "color": "#E76F51",
       "views": [
-        "overview",
-        "overview_detail",
-        "task_natural",
-        "task_two_sided",
         "af",
         "probes"
       ]
     },
     {
       "key": "d1536-language-base",
-      "label": "d1536 language-only",
+      "label": "MarinMoE 11.5B-481M 0.00T (pretrained control)",
       "result": "../../historical/exp582-final/language-base",
       "color": "#7C3AED",
       "views": [
-        "overview",
-        "task_natural",
         "af",
         "probes"
       ]

@@ -115,7 +115,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
             "models": [
                 {
                     "key": "d768-scratch-lrm1",
-                    "label": "d768 scratch 1×",
+                    "label": "MarinMoE 1.5B-60M 0.22T (scratch, 1× LR)",
                     "result": "pretrained",
                     "method": "pretrained-method.json",
                     "color": "#0F766E",
@@ -132,7 +132,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
                 },
                 {
                     "key": "d1536-pretrained",
-                    "label": "d1536 pretrained 1×",
+                    "label": "MarinMoE 11.5B-481M 0.01T (pretrained, 1× LR)",
                     "result": "random",
                     "color": "#2563EB",
                     "views": [
@@ -146,7 +146,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
                 },
                 {
                     "key": "d1536-language-base",
-                    "label": "d1536 language-only",
+                    "label": "MarinMoE 11.5B-481M 0.00T (pretrained control)",
                     "result": "language_base",
                     "color": "#7C3AED",
                     "views": ["overview", "task_natural", "af", "probes"],

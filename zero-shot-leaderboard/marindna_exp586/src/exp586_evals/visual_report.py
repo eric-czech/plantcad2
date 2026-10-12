@@ -70,6 +70,22 @@ def selected(models: list[Model], view: str) -> list[Model]:
     if not values:
         raise ValueError(f"Model catalog selects no models for {view}")
     return values
+
+
+def compact_label(label: str) -> str:
+    """Shorten label punctuation while preserving all model identity fields."""
+    if label.startswith("MarinMoE "):
+        return label.replace(", 1× LR)", " · 1×)").replace(
+            ", 2× LR)", " · 2×)"
+        )
+    return label
+
+
+def display_label(label: str) -> str:
+    """Wrap MarinMoE details onto a second line without changing the label."""
+    return compact_label(label).replace(" (", "\n(", 1)
+
+
 CATEGORIES = (
     "Conservation",
     "Masked motif",
@@ -144,7 +160,7 @@ def overview_series(
 ) -> dict[str, list[float]]:
     series = {
         historical["labels"][rung]: historical["groups"][rung]
-        for rung in ("022t", "039t", "056t")
+        for rung in ("022t", "056t")
     }
     for label, (_, group_key) in PUBLISHED.items():
         series[label] = historical["published_groups"][group_key]
@@ -184,7 +200,10 @@ def model_overview(
         color=np.asarray(colors)[order],
         edgecolor="white",
     )
-    axes[0].set_yticks(np.arange(len(labels)), np.asarray(labels)[order])
+    axes[0].set_yticks(
+        np.arange(len(labels)),
+        np.asarray([display_label(label) for label in labels])[order],
+    )
     axes[0].set_xlabel("20-task composite")
     axes[0].set_xlim(max(0, composite.min() - 0.04), min(1, composite.max() + 0.03))
     axes[0].grid(axis="x", alpha=0.2)
@@ -194,6 +213,7 @@ def model_overview(
 
     selected = [
         "MarinDNA 1B 0.22T",
+        "MarinDNA 1B 0.56T",
         "PlantCAD2-Small",
         "PlantCAD2-Large",
         "PlantCAD2.5-Large",
@@ -211,7 +231,7 @@ def model_overview(
             marker="o",
             linewidth=2.6 if emphasized else 1.15,
             alpha=1 if emphasized else 0.58,
-            label=label,
+            label=display_label(label),
             color=new_colors.get(label),
         )
     axes[1].set_xticks(x, CATEGORIES[:-1], rotation=18, ha="right")
@@ -219,7 +239,7 @@ def model_overview(
     axes[1].set_ylim(max(0, min(selected_values) - 0.04), 0.9)
     axes[1].grid(axis="y", alpha=0.2)
     axes[1].legend(frameon=False, fontsize=8, ncol=2, loc="lower right")
-    figure.suptitle("Exp586 model-family comparison", fontsize=15, weight="bold")
+    figure.suptitle("Best-settings model comparison", fontsize=15, weight="bold")
     figure.text(
         0.5,
         0.01,
@@ -259,7 +279,7 @@ def task_heatmap(
 ) -> None:
     labels, historical_columns = historical_task_columns(historical)
     columns = {
-        "Dense 0.22T": historical_columns[historical["labels"]["022t"]],
+        "Dense 0.56T": historical_columns[historical["labels"]["056t"]],
         "PC2 Small": historical_columns["PlantCAD2-Small"],
         "PC2 Large": historical_columns["PlantCAD2-Large"],
         "PC2.5 Large": historical_columns["PlantCAD2.5-Large"],
@@ -268,7 +288,7 @@ def task_heatmap(
     for model in models:
         methods = []
         if "task_natural" in model.views:
-            methods.append(("natural", "natural"))
+            methods.append(("Natural", "natural"))
         if "task_two_sided" in model.views:
             methods.append(("two-sided", "bidirectional_poe"))
         if not methods:
@@ -279,7 +299,9 @@ def task_heatmap(
         ]:
             raise ValueError(f"New task inventory differs for {model.label}")
         for label, field in methods:
-            columns[f"{model.label}\n{label}"] = [row[field] for row in rows]
+            columns[f"{display_label(model.label)}\n{label}"] = [
+                row[field] for row in rows
+            ]
     names = list(columns)
     values = np.asarray(
         [
@@ -287,7 +309,7 @@ def task_heatmap(
             for name in names
         ]
     ).T
-    figure, axis = plt.subplots(figsize=(max(12.6, 1.05 * len(names)), 10.8))
+    figure, axis = plt.subplots(figsize=(max(14.0, 1.75 * len(names)), 11.5))
     image = axis.imshow(
         values,
         aspect="auto",
@@ -295,7 +317,9 @@ def task_heatmap(
         vmin=min(0.45, float(np.nanmin(values))),
         vmax=0.9,
     )
-    axis.set_xticks(np.arange(len(names)), names, rotation=30, ha="right")
+    axis.set_xticks(
+        np.arange(len(names)), names, rotation=27, ha="right", fontsize=7.5
+    )
     axis.set_yticks(np.arange(len(labels)), labels, fontsize=8)
     for row in range(values.shape[0]):
         for column in range(values.shape[1]):
@@ -312,12 +336,12 @@ def task_heatmap(
                 )
     for boundary in (2.5, 10.5, 18.5):
         axis.axhline(boundary, color="white", linewidth=1.8)
-    axis.set_title("Full-split score by task and inference method", weight="bold")
+    axis.set_title("Full-split score by task at selected settings", weight="bold")
     figure.colorbar(image, ax=axis, fraction=0.025, pad=0.02, label="Task score")
     figure.text(
         0.5,
         0.01,
-        "Two-sided = equal-weight product of forward and aligned reverse-complement A/C/G/T probabilities; SV has no centered two-sided definition.",
+        "MarinMoE uses the 8,192-token Natural readout; Dense uses its best 0.56T checkpoint. Published model values are reused from prior results.",
         ha="center",
         fontsize=8.5,
         color="#475569",
@@ -329,9 +353,11 @@ def task_context_deltas(
     models: list[Model],
     output: Path,
 ) -> None:
+    models = selected(models, "context")
     columns = {}
     labels = None
-    for model in selected(models, "context"):
+    task_names = None
+    for model in models:
         result = model.result
         long_rows = {
             row["key"]: row
@@ -341,11 +367,12 @@ def task_context_deltas(
         current_labels = [f"{row['category']} · {row['task']}" for row in short_rows]
         if labels is None:
             labels = current_labels
+            task_names = [row["task"] for row in short_rows]
         elif labels != current_labels:
             raise ValueError("2,048-token task inventories differ between conditions")
         for label, field in (
             ("natural", "natural"),
-            ("two-sided", "bidirectional_poe"),
+            ("two-sided PoE", "bidirectional_poe"),
         ):
             values = []
             for row in short_rows:
@@ -353,10 +380,22 @@ def task_context_deltas(
                 if row[field] is None or baseline[field] is None:
                     raise ValueError("Context delta requires paired task values")
                 values.append(row[field] - baseline[field])
-            columns[f"{model.label}\n{label}"] = values
-    values = np.asarray(list(columns.values())).T
+            columns[f"{display_label(model.label)}\n{label}"] = values
+    assert task_names is not None
+    abbreviated = []
+    for task in task_names:
+        task = task.replace("Andropogoneae, genome-wide", "Androp.\ngenome")
+        task = task.replace("Poaceae, non-TIS CDS", "Poaceae\nnon-TIS")
+        task = task.replace("Poaceae, TIS CDS", "Poaceae\nTIS")
+        task = task.replace(" (start)", "").replace(" (stop)", "")
+        task = task.replace(" splice ", "\n")
+        task = task.replace(" ", "\n", 1) if "\n" not in task else task
+        abbreviated.append(task)
+    values = np.asarray(list(columns.values()))
     limit = max(0.03, float(np.quantile(np.abs(values), 0.98)))
-    figure, axis = plt.subplots(figsize=(4.0 + 1.35 * len(columns), 10.3))
+    figure, axis = plt.subplots(
+        figsize=(max(12.0, 0.72 * len(task_names)), 3.4 + 0.55 * len(columns))
+    )
     image = axis.imshow(
         values,
         aspect="auto",
@@ -364,8 +403,11 @@ def task_context_deltas(
         vmin=-limit,
         vmax=limit,
     )
-    axis.set_xticks(np.arange(len(columns)), list(columns), fontsize=8)
-    axis.set_yticks(np.arange(len(labels)), labels, fontsize=8)
+    axis.set_xticks(np.arange(len(abbreviated)), abbreviated, fontsize=7)
+    row_labels = list(columns)
+    if len(models) == 1:
+        row_labels = ["Natural", "Two-sided PoE"]
+    axis.set_yticks(np.arange(len(columns)), row_labels, fontsize=8)
     for row in range(values.shape[0]):
         for column in range(values.shape[1]):
             axis.text(
@@ -380,23 +422,28 @@ def task_context_deltas(
                 ),
             )
     for boundary in (2.5, 10.5):
-        axis.axhline(boundary, color="white", linewidth=1.8)
-    axis.set_title("Task-score change from 8,192 to 2,048 tokens", weight="bold")
+        axis.axvline(boundary, color="white", linewidth=1.8)
+    title = "Task-score change from 8,192 to 2,048 tokens"
+    if len(models) == 1:
+        title += f"\n{compact_label(models[0].label)}"
+    axis.set_title(title, weight="bold")
     figure.colorbar(
         image,
         ax=axis,
-        fraction=0.035,
-        pad=0.025,
+        fraction=0.022,
+        pad=0.02,
         label="Δ task score (2,048 − 8,192)",
     )
     figure.text(
         0.5,
-        0.01,
+        0.02,
         "Positive values favor the centered 2,048-token crop. Structural variants are omitted because their historical metric requires the 8,192-position indel boundary.",
         ha="center",
         fontsize=8.5,
         color="#475569",
     )
+    left = 0.1 if len(models) == 1 else 0.22
+    figure.subplots_adjust(bottom=0.25, left=left, right=0.93, top=0.8)
     save(figure, output, "exp586-task-context-deltas")
 
 
@@ -406,77 +453,73 @@ def af_readouts(
     output: Path,
 ) -> None:
     models = selected(models, "af")
-    columns = min(2, len(models))
-    rows = int(np.ceil(len(models) / columns))
-    figure, grid = plt.subplots(
-        rows, columns, figsize=(6.6 * columns, 5.1 * rows), sharey=True, squeeze=False
-    )
-    axes = grid.ravel()
     methods = (
-        ("Natural\ncausal suffix", "llr_acgt_avg"),
-        ("Full-vocab\ncausal suffix", "llr_full_vocab_avg"),
-        ("Target-only\ntwo-sided", "llr_target_poe"),
+        ("Natural", "llr_acgt_avg"),
+        ("Full vocab", "llr_full_vocab_avg"),
+        ("Two-sided PoE", "llr_target_poe"),
     )
-    for axis, model in zip(axes[: len(models)], models, strict=True):
-        result = model.result
-        for context, marker, color in (
-            ("context-8192", "o", model.color),
-            ("context-2048", "s", COLORS["poe"]),
-        ):
-            metrics = result["profiles"][context]["allele_frequency"]["scores"]
-            axis.plot(
-                np.arange(len(methods)),
-                [metrics[key]["overall"]["spearman"] for _, key in methods],
-                marker=marker,
-                linewidth=2.2,
-                color=color,
-                label=context.removeprefix("context-") + " tokens",
-            )
-        for rung, linestyle in zip(
-            ("022t", "039t", "056t"), (":", "--", "-."), strict=True
-        ):
-            score = historical[rung]["metrics"]["100000"]["llr_acgt_avg"]["spearman"]
-            axis.axhline(
-                score,
-                color=COLORS["dense"],
-                linestyle=linestyle,
-                linewidth=1,
-                alpha=0.65,
-                label=DENSE_LABELS[rung] if axis is axes[0] else None,
-            )
-        legacy = historical["022t"]["historical_10k"]
-        for label, style in (("PlantCAD2-Small", ":"), ("PlantCAD2-Large", "--")):
-            axis.axhline(
-                legacy[label]["spearman"],
-                color="#B45309",
-                linestyle=style,
-                linewidth=1,
-                alpha=0.6,
-                label=f"{label} (legacy 10k)" if axis is axes[0] else None,
-            )
-        axis.set_xticks(np.arange(len(methods)), [label for label, _ in methods])
-        axis.set_title(model.label, weight="bold")
-        axis.grid(axis="y", alpha=0.2)
-        axis.set_axisbelow(True)
-    for index, axis in enumerate(axes[: len(models)]):
-        if index % columns == 0:
-            axis.set_ylabel("Spearman correlation with maize AF")
-    axes[0].legend(frameon=False, fontsize=8, ncol=2)
-    for axis in axes[1 : len(models)]:
-        axis.legend(frameon=False, fontsize=8)
-    for axis in axes[len(models) :]:
-        axis.remove()
-    figure.suptitle(
-        "Allele-frequency readout and context sensitivity", fontsize=15, weight="bold"
+    contexts = (("context-8192", "8K"), ("context-2048", "2K"))
+    columns = [f"{label}\n{short}" for label, _ in methods for _, short in contexts]
+    values = []
+    for model in models:
+        row = []
+        for _, key in methods:
+            for context, _ in contexts:
+                metrics = model.result["profiles"][context]["allele_frequency"][
+                    "scores"
+                ]
+                row.append(metrics[key]["overall"]["spearman"])
+        values.append(row)
+    values = np.asarray(values)
+    figure, axis = plt.subplots(
+        figsize=(9.6, max(4.4, 1.05 * len(models) + 1.8))
     )
-    figure.text(
-        0.5,
-        0.01,
-        "All model values use the fixed 94,075-variant split; dense reference lines are prior 8,192-token results on the same split.",
-        ha="center",
-        fontsize=8.5,
-        color="#475569",
+    spread = float(np.ptp(values))
+    padding = max(0.003, 0.06 * spread)
+    image = axis.imshow(
+        values,
+        aspect="auto",
+        cmap="viridis",
+        vmin=float(values.min() - padding),
+        vmax=float(values.max() + padding),
     )
+    axis.set_xticks(np.arange(len(columns)), columns)
+    axis.set_yticks(
+        np.arange(len(models)), [display_label(model.label) for model in models]
+    )
+    best = np.argmax(values, axis=1)
+    threshold = float(values.min() + 0.45 * spread)
+    for row in range(values.shape[0]):
+        for column in range(values.shape[1]):
+            axis.text(
+                column,
+                row,
+                f"{values[row, column]:.3f}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                weight="bold" if column == best[row] else "normal",
+                color="white" if values[row, column] < threshold else "#111827",
+            )
+    for boundary in (1.5, 3.5):
+        axis.axvline(boundary, color="white", linewidth=1.8)
+    axis.set_title("Maize allele-frequency Spearman correlation", weight="bold")
+    figure.colorbar(
+        image, ax=axis, fraction=0.025, pad=0.025, label="Spearman correlation"
+    )
+    dense = [
+        historical[rung]["metrics"]["100000"]["llr_acgt_avg"]["spearman"]
+        for rung in ("022t", "039t", "056t")
+    ]
+    legacy = historical["022t"]["historical_10k"]
+    reference = (
+        f"Prior 8K dense range: {min(dense):.3f}–{max(dense):.3f} · "
+        f"PlantCAD2-Small: {legacy['PlantCAD2-Small']['spearman']:.3f} · "
+        f"PlantCAD2-Large: {legacy['PlantCAD2-Large']['spearman']:.3f} "
+        "(legacy 10k)"
+    )
+    figure.text(0.5, 0.02, reference, ha="center", fontsize=8.5, color="#475569")
+    figure.subplots_adjust(bottom=0.18, left=0.29, right=0.93, top=0.86)
     save(figure, output, "exp586-af-readouts")
 
 
@@ -498,12 +541,12 @@ def probe_readouts(
         }
         for model in models
     }
-    figure, axes = plt.subplots(1, 2, figsize=(13.2, 5.8), sharey=True)
+    figure, axes = plt.subplots(1, 2, figsize=(10.8, 5.2), sharey=True)
     keys = (
         ("Whole\naveraged", "whole_window/strand_average"),
         ("Whole\ndirectional", "whole_window/directional"),
-        ("Variant\naveraged", "variant_token/strand_average"),
-        ("Variant\ndirectional", "variant_token/directional"),
+        ("Target\naveraged", "variant_token/strand_average"),
+        ("Target\ndirectional", "variant_token/directional"),
     )
     x = np.arange(len(keys))
     for axis, profile in zip(axes, ("context-8192", "context-2048"), strict=True):
@@ -523,7 +566,7 @@ def probe_readouts(
                 capsize=3,
                 linewidth=1.8,
                 color=model.color,
-                label=model.label,
+                label=display_label(model.label),
             )
         if profile == "context-8192":
             for rung, style in zip(
@@ -544,21 +587,30 @@ def probe_readouts(
         axis.grid(axis="y", alpha=0.2)
         axis.set_axisbelow(True)
     axes[0].set_ylabel("Held-out Spearman correlation with maize AF")
-    axes[0].legend(frameon=False, fontsize=8, ncol=2)
-    axes[1].legend(frameon=False, fontsize=8)
+    handles, labels = axes[0].get_legend_handles_labels()
+    figure.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.055),
+        frameon=False,
+        fontsize=7,
+        ncol=3,
+    )
     figure.suptitle(
         "Frozen-embedding probes: strand averaging vs directional features",
-        fontsize=15,
+        fontsize=13,
         weight="bold",
     )
     figure.text(
         0.5,
-        0.01,
+        0.012,
         "Points show the fixed held-out split; error bars are paired genomic-block bootstrap 95% intervals.",
         ha="center",
         fontsize=8.5,
         color="#475569",
     )
+    figure.subplots_adjust(bottom=0.28, top=0.84, wspace=0.1)
     save(figure, output, "exp586-probe-readouts")
 
 
@@ -568,7 +620,7 @@ def intrinsic_methods(
 ) -> None:
     models = selected(models, "methods")
     figure, axes = plt.subplots(
-        1, len(models), figsize=(6.25 * len(models), 5.2), sharey=False
+        1, len(models), figsize=(7.0 * len(models), 4.5), sharey=False
     )
     axes = np.atleast_1d(axes)
     methods = (
@@ -600,23 +652,24 @@ def intrinsic_methods(
         axis.set_xscale("log", base=2)
         axis.set_xticks(contexts, [f"{value:,}" for value in contexts])
         axis.set_xlabel("One-sided context (bases)")
-        axis.set_title(model.label, weight="bold")
+        if len(models) > 1:
+            axis.set_title(display_label(model.label), weight="bold", fontsize=10)
         axis.grid(alpha=0.2)
     axes[0].set_ylabel("Held-out nucleotide NLL (lower is better)")
     axes[-1].legend(frameon=False, fontsize=8)
-    figure.suptitle(
-        "Task-independent bidirectional inference validation",
-        fontsize=15,
-        weight="bold",
-    )
+    title = "Task-independent bidirectional inference validation"
+    if len(models) == 1:
+        title += f"\n{compact_label(models[0].label)}"
+    figure.suptitle(title, fontsize=13, weight="bold")
     figure.text(
         0.5,
-        0.01,
+        0.018,
         "The sweep is independent of PlantCAD2 task labels; both orientations from a source window stay in the same split.",
         ha="center",
         fontsize=8.5,
         color="#475569",
     )
+    figure.subplots_adjust(top=0.76, bottom=0.19)
     save(figure, output, "exp586-intrinsic-methods")
 
 
@@ -648,7 +701,7 @@ def prompt_methods(
         axis.barh(y, values, color=colors, alpha=0.9)
         axis.set_yticks(y, labels)
         axis.invert_yaxis()
-        axis.set_title(model.label, weight="bold")
+        axis.set_title(display_label(model.label), weight="bold")
         axis.grid(axis="x", alpha=0.2)
         axis.set_axisbelow(True)
         axis.axvline(np.log(4), color="#64748B", linestyle=":", linewidth=1.3, zorder=0)

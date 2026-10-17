@@ -107,6 +107,29 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
     }
     pretrained_method = tmp_path / "pretrained-method.json"
     write(pretrained_method, method)
+    loss_history = {
+        "schema": 1,
+        "runs": {
+            key: {
+                "training": [
+                    {"input_tokens": 6_000_000, "loss": start},
+                    {"input_tokens": 1_000_000_000, "loss": 1.3},
+                    {"input_tokens": 6_000_000_000, "loss": 1.15},
+                    {"input_tokens": 216_000_000_000, "loss": final},
+                ],
+                "evaluation": [
+                    {"input_tokens": 1_000_000_000, "loss": 1.3},
+                    {"input_tokens": 6_000_000_000, "loss": 1.15},
+                    {"input_tokens": 216_000_000_000, "loss": final},
+                ],
+            }
+            for key, start, final in (
+                ("d768-scratch-lrm1", 2.1, 0.95),
+                ("d1536-pretrained", 4.7, 0.948),
+            )
+        },
+    }
+    write(tmp_path / "training-loss-history.json", loss_history)
     catalog = tmp_path / "catalog.json"
     write(
         catalog,
@@ -128,6 +151,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
                         "af",
                         "probes",
                         "methods",
+                        "loss",
                     ],
                 },
                 {
@@ -142,6 +166,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
                         "task_two_sided",
                         "af",
                         "probes",
+                        "loss",
                     ],
                 },
                 {
@@ -158,6 +183,7 @@ def test_visual_report_writes_reproducible_png_and_svg_assets(tmp_path: Path):
     create_report(catalog, historical, output)
     names = (
         "exp586-model-family-overview",
+        "exp586-training-loss",
         "exp586-task-heatmap",
         "exp586-task-context-deltas",
         "exp586-af-readouts",

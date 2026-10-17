@@ -75,15 +75,22 @@ def selected(models: list[Model], view: str) -> list[Model]:
 def compact_label(label: str) -> str:
     """Shorten label punctuation while preserving all model identity fields."""
     if label.startswith("MarinMoE "):
-        return label.replace(", 1× LR)", " · 1×)").replace(
-            ", 2× LR)", " · 2×)"
-        )
+        return label.replace(", 1× LR)", " · 1×)").replace(", 2× LR)", " · 2×)")
     return label
 
 
 def display_label(label: str) -> str:
     """Wrap MarinMoE details onto a second line without changing the label."""
     return compact_label(label).replace(" (", "\n(", 1)
+
+
+def condition_label(model: Model) -> str:
+    """Use a short condition label once the common model identity is established."""
+    if "scratch" in model.key:
+        return "Scratch · 1× LR"
+    if "pretrained" in model.key:
+        return "Language-pretrained · 1× LR"
+    return compact_label(model.label)
 
 
 CATEGORIES = (
@@ -187,6 +194,7 @@ def model_overview(
     composite = values[:, -1]
     order = np.argsort(composite)
     new_colors = {model.label: model.color for model in models}
+    new_short_labels = {model.label: condition_label(model) for model in models}
     colors = [
         new_colors.get(
             label,
@@ -231,7 +239,7 @@ def model_overview(
             marker="o",
             linewidth=2.6 if emphasized else 1.15,
             alpha=1 if emphasized else 0.58,
-            label=display_label(label),
+            label=new_short_labels.get(label, display_label(label)),
             color=new_colors.get(label),
         )
     axes[1].set_xticks(x, CATEGORIES[:-1], rotation=18, ha="right")
@@ -243,7 +251,7 @@ def model_overview(
     figure.text(
         0.5,
         0.01,
-        "All points use the original full-split PlantCAD2 scoring definition at 8,192 tokens.",
+        "All points use the original full-split PlantCAD2 scoring definition with 8,192-base inputs.",
         ha="center",
         color="#475569",
         fontsize=9,
@@ -299,9 +307,7 @@ def task_heatmap(
         ]:
             raise ValueError(f"New task inventory differs for {model.label}")
         for label, field in methods:
-            columns[f"{display_label(model.label)}\n{label}"] = [
-                row[field] for row in rows
-            ]
+            columns[f"{condition_label(model)}\n{label}"] = [row[field] for row in rows]
     names = list(columns)
     values = np.asarray(
         [
@@ -317,9 +323,7 @@ def task_heatmap(
         vmin=min(0.45, float(np.nanmin(values))),
         vmax=0.9,
     )
-    axis.set_xticks(
-        np.arange(len(names)), names, rotation=27, ha="right", fontsize=7.5
-    )
+    axis.set_xticks(np.arange(len(names)), names, rotation=27, ha="right", fontsize=7.5)
     axis.set_yticks(np.arange(len(labels)), labels, fontsize=8)
     for row in range(values.shape[0]):
         for column in range(values.shape[1]):
@@ -341,12 +345,168 @@ def task_heatmap(
     figure.text(
         0.5,
         0.01,
-        "MarinMoE uses the 8,192-token Natural readout; Dense uses its best 0.56T checkpoint. Published model values are reused from prior results.",
+        "MarinMoE uses the 8,192-base Natural readout; Dense uses its best 0.56T checkpoint. Published model values are reused from prior results.",
         ha="center",
         fontsize=8.5,
         color="#475569",
     )
     save(figure, output, "exp586-task-heatmap")
+
+
+def binned_loss(
+    rows: list[dict], edges: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    tokens = np.asarray([row["input_tokens"] for row in rows], dtype=np.float64) / 1e9
+    losses = np.asarray([row["loss"] for row in rows], dtype=np.float64)
+    assignments = np.digitize(tokens, edges) - 1
+    centers, medians, lower, upper = [], [], [], []
+    for index in range(len(edges) - 1):
+        values = losses[assignments == index]
+        if not len(values):
+            continue
+        centers.append((edges[index] + edges[index + 1]) / 2)
+        medians.append(np.median(values))
+        lower.append(np.quantile(values, 0.2))
+        upper.append(np.quantile(values, 0.8))
+    return tuple(np.asarray(values) for values in (centers, medians, lower, upper))
+
+
+def training_loss(models: list[Model], history_path: Path, output: Path) -> None:
+    models = selected(models, "loss")
+    history = load(history_path)
+    if history.get("schema") != 1:
+        raise ValueError("Training-loss history must use schema 1")
+    early_edges = np.geomspace(10 * 524_288 / 1e9, 5, 42)
+    later_edges = np.arange(5, 218.01, 2)
+    figure, axes = plt.subplots(
+        1,
+        2,
+        figsize=(13.5, 5.2),
+        gridspec_kw={"width_ratios": (0.9, 1.55)},
+    )
+    legend_labels = {
+        "scratch": "Scratch · 8-token DNA vocabulary",
+        "pretrained": "Language-pretrained · 128k vocabulary",
+    }
+    evaluation_by_model = {}
+    for model_index, model in enumerate(models):
+        run = history["runs"].get(model.key)
+        if run is None:
+            raise ValueError(f"Training-loss history omits {model.key}")
+        condition = "scratch" if "scratch" in model.key else "pretrained"
+        train_rows = [
+            row for row in run["training"] if row["input_tokens"] > 10 * 524_288
+        ]
+        evaluation = sorted(run["evaluation"], key=lambda row: row["input_tokens"])
+        evaluation_by_model[model.key] = {
+            row["input_tokens"]: row["loss"] for row in evaluation
+        }
+        if not train_rows or not evaluation:
+            raise ValueError(f"Training-loss history is empty for {model.key}")
+        for axis, edges in zip(axes, (early_edges, later_edges), strict=True):
+            centers, medians, lower, upper = binned_loss(train_rows, edges)
+            axis.fill_between(
+                centers,
+                lower,
+                upper,
+                color=model.color,
+                alpha=0.10,
+                linewidth=0,
+            )
+            axis.plot(
+                centers,
+                medians,
+                color=model.color,
+                linestyle="--",
+                linewidth=1.35,
+                alpha=0.82,
+            )
+        early = [row for row in evaluation if row["input_tokens"] <= 5e9]
+        later = [row for row in evaluation if row["input_tokens"] >= 5e9]
+        for axis, rows, markevery in zip(axes, (early, later), (1, 8), strict=True):
+            axis.plot(
+                [row["input_tokens"] / 1e9 for row in rows],
+                [row["loss"] for row in rows],
+                color=model.color,
+                marker="o",
+                markersize=4 if axis is axes[0] else 2.7,
+                markevery=markevery,
+                linewidth=2,
+                label=legend_labels[condition],
+            )
+        final = evaluation[-1]
+        axes[1].annotate(
+            f"{final['loss']:.3f}",
+            (final["input_tokens"] / 1e9, final["loss"]),
+            xytext=(-7, 11 if model_index == 0 else -16),
+            textcoords="offset points",
+            ha="right",
+            color=model.color,
+            fontsize=8,
+            weight="bold",
+        )
+    axes[0].set_xscale("log")
+    axes[0].set_xlim(10 * 524_288 / 1e9, 5)
+    axes[0].set_ylim(0.95, 5.45)
+    axes[0].set_xticks(
+        [0.01, 0.03, 0.1, 0.3, 1, 3, 5],
+        ["0.01", "0.03", "0.1", "0.3", "1", "3", "5"],
+    )
+    axes[0].set_title("Adaptation: first 5B DNA tokens", weight="bold")
+    axes[1].set_xlim(5, 218)
+    axes[1].set_ylim(0.92, 1.22)
+    axes[1].set_title("Convergence after 5B tokens", weight="bold")
+    if len(evaluation_by_model) == 2:
+        first, second = evaluation_by_model.values()
+        common = sorted(first.keys() & second.keys())
+        for index, token in enumerate(common):
+            if all(
+                abs(first[value] - second[value]) <= 0.01 for value in common[index:]
+            ):
+                threshold = token / 1e9
+                axes[1].axvline(
+                    threshold, color="#64748B", linestyle=":", linewidth=1.2
+                )
+                axes[1].text(
+                    threshold + 2,
+                    1.205,
+                    "eval gap stays <0.01",
+                    color="#475569",
+                    fontsize=8,
+                    va="top",
+                )
+                break
+    for axis in axes:
+        axis.grid(alpha=0.18)
+        axis.set_axisbelow(True)
+        axis.set_xlabel("DNA input tokens (billions)")
+    axes[0].set_ylabel("Next-token cross-entropy loss")
+    handles, labels = axes[0].get_legend_handles_labels()
+    figure.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.91),
+        ncol=2,
+        frameon=False,
+        fontsize=9,
+    )
+    figure.suptitle(
+        "Different starting losses, nearly identical final DNA loss",
+        fontsize=15,
+        weight="bold",
+        y=0.99,
+    )
+    figure.text(
+        0.5,
+        0.012,
+        "Solid lines: fixed 512-example eval set · Dashed lines: median training loss in token bins (shading: 20th–80th percentile) · First 10 updates omitted",
+        ha="center",
+        fontsize=8.5,
+        color="#475569",
+    )
+    figure.subplots_adjust(top=0.79, bottom=0.18, wspace=0.18, left=0.075, right=0.985)
+    save(figure, output, "exp586-training-loss")
 
 
 def task_context_deltas(
@@ -380,7 +540,7 @@ def task_context_deltas(
                 if row[field] is None or baseline[field] is None:
                     raise ValueError("Context delta requires paired task values")
                 values.append(row[field] - baseline[field])
-            columns[f"{display_label(model.label)}\n{label}"] = values
+            columns[f"{condition_label(model)}\n{label}"] = values
     assert task_names is not None
     abbreviated = []
     for task in task_names:
@@ -423,7 +583,7 @@ def task_context_deltas(
             )
     for boundary in (2.5, 10.5):
         axis.axvline(boundary, color="white", linewidth=1.8)
-    title = "Task-score change from 8,192 to 2,048 tokens"
+    title = "Task-score change from 8,192 to 2,048 bases"
     if len(models) == 1:
         title += f"\n{compact_label(models[0].label)}"
     axis.set_title(title, weight="bold")
@@ -437,7 +597,7 @@ def task_context_deltas(
     figure.text(
         0.5,
         0.02,
-        "Positive values favor the centered 2,048-token crop. Structural variants are omitted because their historical metric requires the 8,192-position indel boundary.",
+        "Positive values favor the centered 2,048-base crop. Structural variants are omitted because their historical metric requires the 8,192-position indel boundary.",
         ha="center",
         fontsize=8.5,
         color="#475569",
@@ -459,7 +619,14 @@ def af_readouts(
         ("Two-sided PoE", "llr_target_poe"),
     )
     contexts = (("context-8192", "8K"), ("context-2048", "2K"))
-    columns = [f"{label}\n{short}" for label, _ in methods for _, short in contexts]
+    display = {
+        "Natural": "Natural",
+        "Full vocab": "Full vocab",
+        "Two-sided PoE": "Two-sided\nPoE",
+    }
+    columns = [
+        f"{display[label]}\n{short}" for label, _ in methods for _, short in contexts
+    ]
     values = []
     for model in models:
         row = []
@@ -471,9 +638,7 @@ def af_readouts(
                 row.append(metrics[key]["overall"]["spearman"])
         values.append(row)
     values = np.asarray(values)
-    figure, axis = plt.subplots(
-        figsize=(9.6, max(4.4, 1.05 * len(models) + 1.8))
-    )
+    figure, axis = plt.subplots(figsize=(9.6, max(4.4, 1.05 * len(models) + 1.8)))
     spread = float(np.ptp(values))
     padding = max(0.003, 0.06 * spread)
     image = axis.imshow(
@@ -483,9 +648,9 @@ def af_readouts(
         vmin=float(values.min() - padding),
         vmax=float(values.max() + padding),
     )
-    axis.set_xticks(np.arange(len(columns)), columns)
+    axis.set_xticks(np.arange(len(columns)), columns, fontsize=9)
     axis.set_yticks(
-        np.arange(len(models)), [display_label(model.label) for model in models]
+        np.arange(len(models)), [condition_label(model) for model in models]
     )
     best = np.argmax(values, axis=1)
     threshold = float(values.min() + 0.45 * spread)
@@ -566,7 +731,7 @@ def probe_readouts(
                 capsize=3,
                 linewidth=1.8,
                 color=model.color,
-                label=display_label(model.label),
+                label=condition_label(model),
             )
         if profile == "context-8192":
             for rung, style in zip(
@@ -583,7 +748,7 @@ def probe_readouts(
                     label=DENSE_LABELS[rung],
                 )
         axis.set_xticks(x, [label for label, _ in keys])
-        axis.set_title(profile.removeprefix("context-") + " tokens", weight="bold")
+        axis.set_title(profile.removeprefix("context-") + " bases", weight="bold")
         axis.grid(axis="y", alpha=0.2)
         axis.set_axisbelow(True)
     axes[0].set_ylabel("Held-out Spearman correlation with maize AF")
@@ -653,7 +818,7 @@ def intrinsic_methods(
         axis.set_xticks(contexts, [f"{value:,}" for value in contexts])
         axis.set_xlabel("One-sided context (bases)")
         if len(models) > 1:
-            axis.set_title(display_label(model.label), weight="bold", fontsize=10)
+            axis.set_title(condition_label(model), weight="bold", fontsize=10)
         axis.grid(alpha=0.2)
     axes[0].set_ylabel("Held-out nucleotide NLL (lower is better)")
     axes[-1].legend(frameon=False, fontsize=8)
@@ -701,7 +866,7 @@ def prompt_methods(
         axis.barh(y, values, color=colors, alpha=0.9)
         axis.set_yticks(y, labels)
         axis.invert_yaxis()
-        axis.set_title(display_label(model.label), weight="bold")
+        axis.set_title(condition_label(model), weight="bold")
         axis.grid(axis="x", alpha=0.2)
         axis.set_axisbelow(True)
         axis.axvline(np.log(4), color="#64748B", linestyle=":", linewidth=1.3, zorder=0)
@@ -740,6 +905,8 @@ def create_report(
         for rung in ("022t", "039t", "056t")
     }
     model_overview(models, history, output)
+    if any("loss" in model.views for model in models):
+        training_loss(models, catalog.parent / "training-loss-history.json", output)
     task_heatmap(models, history, output)
     task_context_deltas(models, output)
     af_readouts(models, af_history, output)

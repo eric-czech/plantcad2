@@ -14,37 +14,25 @@
         "context",
         "af",
         "probes",
-        "methods"
+        "methods",
+        "loss"
       ]
     },
     {
-      "key": "d1536-pretrained-lrm1-seed0",
-      "label": "MarinMoE 11.5B-481M 0.01T (pretrained, 1× LR)",
-      "result": "../../historical/exp582-final/pretrained",
+      "key": "d768-pretrained-lrm1-seed0",
+      "label": "MarinMoE 1.5B-60M 0.22T (language-pretrained, 1× LR)",
+      "result": "pretrained-lrm1-seed0",
+      "method": "methods/pretrained-lrm1-seed0.json",
       "color": "#2563EB",
       "views": [
+        "overview",
+        "overview_detail",
+        "task_natural",
+        "context",
         "af",
-        "probes"
-      ]
-    },
-    {
-      "key": "d1536-random-lrm2-seed0",
-      "label": "MarinMoE 11.5B-481M 0.01T (scratch, 2× LR)",
-      "result": "../../historical/exp582-final/random",
-      "color": "#E76F51",
-      "views": [
-        "af",
-        "probes"
-      ]
-    },
-    {
-      "key": "d1536-language-base",
-      "label": "MarinMoE 11.5B-481M 0.00T (pretrained control)",
-      "result": "../../historical/exp582-final/language-base",
-      "color": "#7C3AED",
-      "views": [
-        "af",
-        "probes"
+        "probes",
+        "methods",
+        "loss"
       ]
     }
   ]

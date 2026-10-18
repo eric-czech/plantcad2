@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 
 from exp586_evals.historical import verify_exp582_results
 
@@ -385,15 +386,37 @@ def training_loss(models: list[Model], history_path: Path, output: Path) -> None
         gridspec_kw={"width_ratios": (0.9, 1.55)},
     )
     legend_labels = {
-        "scratch": "Scratch · 8-token DNA vocabulary",
+        "scratch": "Scratch · 8-token vocabulary",
         "pretrained": "Language-pretrained · 128k vocabulary",
     }
+    eval_markers = {"scratch": "o", "pretrained": "s"}
+    legend_handles = []
     evaluation_by_model = {}
     for model_index, model in enumerate(models):
         run = history["runs"].get(model.key)
         if run is None:
             raise ValueError(f"Training-loss history omits {model.key}")
         condition = "scratch" if "scratch" in model.key else "pretrained"
+        legend_handles.extend(
+            (
+                Line2D(
+                    [0],
+                    [0],
+                    color=model.color,
+                    marker=eval_markers[condition],
+                    linewidth=2,
+                    label=f"{legend_labels[condition]} — fixed eval",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color=model.color,
+                    linestyle="--",
+                    linewidth=1.35,
+                    label=f"{legend_labels[condition]} — training median",
+                ),
+            )
+        )
         train_rows = [
             row for row in run["training"] if row["input_tokens"] > 10 * 524_288
         ]
@@ -423,17 +446,23 @@ def training_loss(models: list[Model], history_path: Path, output: Path) -> None
             )
         early = [row for row in evaluation if row["input_tokens"] <= 5e9]
         later = [row for row in evaluation if row["input_tokens"] >= 5e9]
-        for axis, rows, markevery in zip(axes, (early, later), (1, 8), strict=True):
-            axis.plot(
-                [row["input_tokens"] / 1e9 for row in rows],
-                [row["loss"] for row in rows],
-                color=model.color,
-                marker="o",
-                markersize=4 if axis is axes[0] else 2.7,
-                markevery=markevery,
-                linewidth=2,
-                label=legend_labels[condition],
-            )
+        axes[0].scatter(
+            [row["input_tokens"] / 1e9 for row in early],
+            [row["loss"] for row in early],
+            color=model.color,
+            marker=eval_markers[condition],
+            s=23,
+            zorder=4,
+        )
+        axes[1].plot(
+            [row["input_tokens"] / 1e9 for row in later],
+            [row["loss"] for row in later],
+            color=model.color,
+            marker=eval_markers[condition],
+            markersize=2.7,
+            markevery=8,
+            linewidth=2,
+        )
         final = evaluation[-1]
         axes[1].annotate(
             f"{final['loss']:.3f}",
@@ -481,18 +510,16 @@ def training_loss(models: list[Model], history_path: Path, output: Path) -> None
         axis.set_axisbelow(True)
         axis.set_xlabel("DNA input tokens (billions)")
     axes[0].set_ylabel("Next-token cross-entropy loss")
-    handles, labels = axes[0].get_legend_handles_labels()
     figure.legend(
-        handles,
-        labels,
+        handles=legend_handles,
         loc="upper center",
         bbox_to_anchor=(0.5, 0.91),
         ncol=2,
         frameon=False,
-        fontsize=9,
+        fontsize=8.5,
     )
     figure.suptitle(
-        "Different starting losses, nearly identical final DNA loss",
+        "Two models: different starting losses, nearly identical final DNA loss",
         fontsize=15,
         weight="bold",
         y=0.99,
@@ -500,7 +527,7 @@ def training_loss(models: list[Model], history_path: Path, output: Path) -> None
     figure.text(
         0.5,
         0.012,
-        "Solid lines: fixed 512-example eval set · Dashed lines: median training loss in token bins (shading: 20th–80th percentile) · First 10 updates omitted",
+        "Early fixed evals are discrete observations; later solid lines connect regular evals · Training bands show the 20th–80th percentile within each token bin · First 10 updates omitted",
         ha="center",
         fontsize=8.5,
         color="#475569",

@@ -354,22 +354,20 @@ def task_heatmap(
     save(figure, output, "exp586-task-heatmap")
 
 
-def binned_loss(
+def binned_mean_loss(
     rows: list[dict], edges: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     tokens = np.asarray([row["input_tokens"] for row in rows], dtype=np.float64) / 1e9
     losses = np.asarray([row["loss"] for row in rows], dtype=np.float64)
     assignments = np.digitize(tokens, edges) - 1
-    centers, medians, lower, upper = [], [], [], []
+    centers, means = [], []
     for index in range(len(edges) - 1):
         values = losses[assignments == index]
         if not len(values):
             continue
         centers.append((edges[index] + edges[index + 1]) / 2)
-        medians.append(np.median(values))
-        lower.append(np.quantile(values, 0.2))
-        upper.append(np.quantile(values, 0.8))
-    return tuple(np.asarray(values) for values in (centers, medians, lower, upper))
+        means.append(np.mean(values))
+    return np.asarray(centers), np.asarray(means)
 
 
 def training_loss(models: list[Model], history_path: Path, output: Path) -> None:
@@ -377,162 +375,247 @@ def training_loss(models: list[Model], history_path: Path, output: Path) -> None
     history = load(history_path)
     if history.get("schema") != 1:
         raise ValueError("Training-loss history must use schema 1")
-    early_edges = np.geomspace(10 * 524_288 / 1e9, 5, 42)
-    later_edges = np.arange(5, 218.01, 2)
-    figure, axes = plt.subplots(
-        1,
-        2,
-        figsize=(13.5, 5.2),
-        gridspec_kw={"width_ratios": (0.9, 1.55)},
-    )
-    legend_labels = {
-        "scratch": "Scratch · 8-token vocabulary",
-        "pretrained": "Language-pretrained · 128k vocabulary",
-    }
-    eval_markers = {"scratch": "o", "pretrained": "s"}
-    legend_handles = []
-    evaluation_by_model = {}
-    for model_index, model in enumerate(models):
+    model_by_condition = {}
+    run_by_condition = {}
+    for model in models:
         run = history["runs"].get(model.key)
         if run is None:
             raise ValueError(f"Training-loss history omits {model.key}")
         condition = "scratch" if "scratch" in model.key else "pretrained"
-        legend_handles.extend(
-            (
-                Line2D(
-                    [0],
-                    [0],
-                    color=model.color,
-                    marker=eval_markers[condition],
-                    linewidth=2,
-                    label=f"{legend_labels[condition]} — fixed eval",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    color=model.color,
-                    linestyle="--",
-                    linewidth=1.35,
-                    label=f"{legend_labels[condition]} — training median",
-                ),
-            )
-        )
-        train_rows = [
-            row for row in run["training"] if row["input_tokens"] > 10 * 524_288
-        ]
-        evaluation = sorted(run["evaluation"], key=lambda row: row["input_tokens"])
-        evaluation_by_model[model.key] = {
-            row["input_tokens"]: row["loss"] for row in evaluation
-        }
-        if not train_rows or not evaluation:
+        if condition in model_by_condition:
+            raise ValueError(f"Loss view contains multiple {condition} models")
+        if not run["training"] or not run["evaluation"]:
             raise ValueError(f"Training-loss history is empty for {model.key}")
-        for axis, edges in zip(axes, (early_edges, later_edges), strict=True):
-            centers, medians, lower, upper = binned_loss(train_rows, edges)
-            axis.fill_between(
-                centers,
-                lower,
-                upper,
-                color=model.color,
-                alpha=0.10,
-                linewidth=0,
-            )
-            axis.plot(
-                centers,
-                medians,
-                color=model.color,
-                linestyle="--",
-                linewidth=1.35,
-                alpha=0.82,
-            )
-        early = [row for row in evaluation if row["input_tokens"] <= 5e9]
-        later = [row for row in evaluation if row["input_tokens"] >= 5e9]
-        axes[0].scatter(
-            [row["input_tokens"] / 1e9 for row in early],
-            [row["loss"] for row in early],
-            color=model.color,
-            marker=eval_markers[condition],
-            s=23,
-            zorder=4,
+        model_by_condition[condition] = model
+        run_by_condition[condition] = run
+    if set(model_by_condition) != {"scratch", "pretrained"}:
+        raise ValueError("Loss view requires one scratch and one pretrained model")
+
+    colors = [model_by_condition[name].color for name in ("scratch", "pretrained")]
+    labels = [
+        "Scratch · 8-token vocabulary",
+        "Language-pretrained · 128k vocabulary",
+    ]
+    evaluations = []
+    for condition in ("scratch", "pretrained"):
+        evaluations.append(
+            {
+                row["input_tokens"]: row["loss"]
+                for row in run_by_condition[condition]["evaluation"]
+            }
         )
-        axes[1].plot(
-            [row["input_tokens"] / 1e9 for row in later],
-            [row["loss"] for row in later],
-            color=model.color,
-            marker=eval_markers[condition],
-            markersize=2.7,
-            markevery=8,
-            linewidth=2,
+    common_tokens = np.asarray(
+        sorted(evaluations[0].keys() & evaluations[1].keys()), dtype=np.int64
+    )
+    if not len(common_tokens):
+        raise ValueError("Scratch and pretrained runs have no matched evaluations")
+    eval_tokens = common_tokens / 1e9
+    eval_losses = [
+        np.asarray([values[int(token)] for token in common_tokens])
+        for values in evaluations
+    ]
+    eval_gap = eval_losses[0] - eval_losses[1]
+
+    first_ten_updates = 10 * 524_288
+    early_edges = np.geomspace(first_ten_updates / 1e9, 5, 72)
+    late_edges = np.arange(5, 225.001, 10)
+    early_training = []
+    late_training = []
+    for condition in ("scratch", "pretrained"):
+        rows = [
+            row
+            for row in run_by_condition[condition]["training"]
+            if row["input_tokens"] > first_ten_updates
+        ]
+        early_training.append(binned_mean_loss(rows, early_edges))
+        late_training.append(binned_mean_loss(rows, late_edges))
+    if not np.allclose(late_training[0][0], late_training[1][0]):
+        raise ValueError("Late training-loss intervals do not align")
+    late_tokens = late_training[0][0]
+    late_gap = late_training[0][1] - late_training[1][1]
+
+    figure, axes = plt.subplots(2, 2, figsize=(14, 8.6))
+    early_eval = eval_tokens <= 75
+    for losses, color in zip(eval_losses, colors, strict=True):
+        axes[0, 0].plot(
+            eval_tokens[early_eval], losses[early_eval], color=color, linewidth=2
         )
-        final = evaluation[-1]
-        axes[1].annotate(
-            f"{final['loss']:.3f}",
-            (final["input_tokens"] / 1e9, final["loss"]),
-            xytext=(-7, 11 if model_index == 0 else -16),
-            textcoords="offset points",
-            ha="right",
-            color=model.color,
-            fontsize=8,
-            weight="bold",
-        )
-    axes[0].set_xscale("log")
-    axes[0].set_xlim(10 * 524_288 / 1e9, 5)
-    axes[0].set_ylim(0.95, 5.45)
-    axes[0].set_xticks(
-        [0.01, 0.03, 0.1, 0.3, 1, 3, 5],
-        ["0.01", "0.03", "0.1", "0.3", "1", "3", "5"],
+    axes[0, 0].set_xlim(0, 75)
+    axes[0, 0].set_ylim(1.045, 1.29)
+    axes[0, 0].set_title("Evaluation: pretrained leads early", weight="bold")
+    axes[0, 0].set_ylabel("Fixed-eval loss (lower is better)")
+    axes[0, 0].annotate(
+        f"{eval_gap[0]:.3f} lower at 1B",
+        xy=(eval_tokens[0], eval_losses[1][0]),
+        xytext=(11, 1.255),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        color="#475569",
+        fontsize=9,
     )
-    axes[0].set_title("Adaptation: first 5B DNA tokens", weight="bold")
-    axes[1].set_xlim(5, 218)
-    axes[1].set_ylim(0.92, 1.22)
-    axes[1].set_title("Convergence after 5B tokens", weight="bold")
-    if len(evaluation_by_model) == 2:
-        first, second = evaluation_by_model.values()
-        common = sorted(first.keys() & second.keys())
-        for index, token in enumerate(common):
-            if all(
-                abs(first[value] - second[value]) <= 0.01 for value in common[index:]
-            ):
-                threshold = token / 1e9
-                axes[1].axvline(
-                    threshold, color="#64748B", linestyle=":", linewidth=1.2
-                )
-                axes[1].text(
-                    threshold + 2,
-                    1.205,
-                    "eval gap stays <0.01",
-                    color="#475569",
-                    fontsize=8,
-                    va="top",
-                )
-                break
-    for axis in axes:
-        axis.grid(alpha=0.18)
-        axis.set_axisbelow(True)
-        axis.set_xlabel("DNA input tokens (billions)")
-    axes[0].set_ylabel("Next-token cross-entropy loss")
-    figure.legend(
-        handles=legend_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.91),
-        ncol=2,
-        frameon=False,
-        fontsize=8.5,
+    threshold_index = next(
+        index
+        for index in range(len(eval_gap))
+        if np.all(np.abs(eval_gap[index:]) < 0.005)
     )
-    figure.suptitle(
-        "Two models: different starting losses, nearly identical final DNA loss",
-        fontsize=15,
-        weight="bold",
-        y=0.99,
+    threshold = eval_tokens[threshold_index]
+    axes[0, 0].annotate(
+        f"gap stays below 0.005 after {threshold:.0f}B",
+        xy=(threshold, eval_losses[1][threshold_index]),
+        xytext=(31, 1.12),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        color="#475569",
+        fontsize=9,
     )
-    figure.text(
-        0.5,
-        0.012,
-        "Early fixed evals are discrete observations; later solid lines connect regular evals · Training bands show the 20th–80th percentile within each token bin · First 10 updates omitted",
+
+    axes[0, 1].plot(eval_tokens, eval_gap, color="#7C3AED", linewidth=2)
+    axes[0, 1].fill_between(eval_tokens, 0, eval_gap, color="#7C3AED", alpha=0.12)
+    axes[0, 1].axhline(0, color="#64748B", linewidth=1)
+    axes[0, 1].set_xlim(0, 218)
+    axes[0, 1].set_ylim(-0.001, 0.031)
+    axes[0, 1].set_title("Evaluation: the advantage shrinks", weight="bold")
+    axes[0, 1].set_ylabel("Scratch loss − pretrained loss")
+    axes[0, 1].text(
+        100,
+        0.027,
+        "Positive means pretrained has lower loss",
         ha="center",
         fontsize=8.5,
         color="#475569",
     )
-    figure.subplots_adjust(top=0.79, bottom=0.18, wspace=0.18, left=0.075, right=0.985)
+    axes[0, 1].annotate(
+        f"{eval_gap[0]:.3f}",
+        (eval_tokens[0], eval_gap[0]),
+        xytext=(12, 0.028),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        fontsize=9,
+    )
+    final_label = (
+        f"Final: {eval_losses[0][-1]:.4f} scratch\n"
+        f"{eval_losses[1][-1]:.4f} pretrained\n"
+        f"Δ {eval_gap[-1]:.4f}"
+    )
+    axes[0, 1].annotate(
+        final_label,
+        (eval_tokens[-1], eval_gap[-1]),
+        xytext=(158, 0.011),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        fontsize=9,
+    )
+
+    for (tokens, losses), color in zip(early_training, colors, strict=True):
+        axes[1, 0].plot(tokens, losses, color=color, linewidth=2)
+    axes[1, 0].set_xscale("log")
+    axes[1, 0].set_xlim(first_ten_updates / 1e9, 5)
+    axes[1, 0].set_ylim(
+        0.95, max(float(losses.max()) for _, losses in early_training) + 0.25
+    )
+    axes[1, 0].set_xticks(
+        [0.01, 0.03, 0.1, 0.3, 1, 3, 5],
+        [".01", ".03", ".1", ".3", "1", "3", "5"],
+    )
+    axes[1, 0].set_title("Training loss: rapid vocabulary adaptation", weight="bold")
+    axes[1, 0].set_ylabel("Average training loss")
+    axes[1, 0].annotate(
+        "128k vocabulary starts costly",
+        xy=(0.009, 4.55),
+        xytext=(0.055, 4.75),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        color="#475569",
+        fontsize=9,
+    )
+    early_gap = early_training[0][1] - early_training[1][1]
+    crossing_index = int(np.flatnonzero(early_gap >= 0)[0])
+    crossing = early_training[0][0][crossing_index]
+    axes[1, 0].annotate(
+        f"pretrained catches up by ~{crossing * 1_000:.0f}M tokens",
+        xy=(crossing, early_training[1][1][crossing_index]),
+        xytext=(0.09, 2.65),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        color="#475569",
+        fontsize=9,
+    )
+
+    axes[1, 1].plot(
+        late_tokens,
+        late_gap,
+        color="#7C3AED",
+        linewidth=2,
+        marker="o",
+        markersize=3,
+    )
+    axes[1, 1].fill_between(
+        late_tokens,
+        0,
+        late_gap,
+        where=late_gap >= 0,
+        color=model_by_condition["pretrained"].color,
+        alpha=0.13,
+        interpolate=True,
+    )
+    axes[1, 1].fill_between(
+        late_tokens,
+        0,
+        late_gap,
+        where=late_gap < 0,
+        color=model_by_condition["scratch"].color,
+        alpha=0.13,
+        interpolate=True,
+    )
+    axes[1, 1].axhline(0, color="#64748B", linewidth=1)
+    axes[1, 1].set_xlim(5, 218)
+    axes[1, 1].set_ylim(
+        min(-0.005, float(late_gap.min()) - 0.002), float(late_gap.max()) + 0.002
+    )
+    axes[1, 1].set_title("Late training loss: no persistent difference", weight="bold")
+    axes[1, 1].set_ylabel("Scratch loss − pretrained loss")
+    axes[1, 1].text(
+        112,
+        float(late_gap.max()) * 0.80,
+        "Positive means pretrained has lower loss",
+        ha="center",
+        fontsize=8.5,
+        color="#475569",
+    )
+    axes[1, 1].annotate(
+        "small differences fluctuate around zero",
+        xy=(130, 0),
+        xytext=(82, -0.0038),
+        arrowprops={"arrowstyle": "->", "color": "#64748B"},
+        color="#475569",
+        fontsize=9,
+    )
+
+    for axis in axes.ravel():
+        axis.grid(alpha=0.2)
+        axis.set_axisbelow(True)
+        axis.set_xlabel("DNA tokens (billions)")
+    figure.legend(
+        handles=[
+            Line2D([0], [0], color=color, linewidth=2, label=label)
+            for color, label in zip(colors, labels, strict=True)
+        ],
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.935),
+        ncol=2,
+        frameon=False,
+    )
+    figure.suptitle(
+        "Language pretraining helps early evaluation; both models converge",
+        fontsize=16,
+        weight="bold",
+        y=0.985,
+    )
+    figure.text(
+        0.5,
+        0.012,
+        "Evaluation lines use the same 512 examples at matched token counts. Training lines average nearby logged batches to remove batch noise; the isolated pretrained-only eval at 13M tokens is omitted.",
+        ha="center",
+        fontsize=9,
+        color="#475569",
+    )
+    figure.subplots_adjust(
+        left=0.075, right=0.985, bottom=0.10, top=0.86, wspace=0.22, hspace=0.34
+    )
     save(figure, output, "exp586-training-loss")
 
 

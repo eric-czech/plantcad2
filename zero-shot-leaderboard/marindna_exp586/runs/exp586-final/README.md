@@ -21,9 +21,9 @@ Language pretraining therefore provides no main-task gain after 0.22T DNA tokens
 
 ![Training and fixed-eval loss](assets/exp586-training-loss.png)
 
-The language-pretrained run starts with much higher DNA loss, consistent with out-of-distribution inputs and a 128k output vocabulary. At every logged fixed evaluation after **17.83B tokens**, the loss gap stays below 0.01; the final values are **0.9491** scratch and **0.9475** pretrained. Similar next-base loss ultimately corresponds to similar aggregate task accuracy, although the task groups still move in different directions.
+The first matched fixed evaluation, after 1.05B DNA tokens, favors language-pretrained by **0.0284 loss**. That advantage stays below **0.005 after 52.43B tokens** and ends at **0.9491 scratch vs 0.9475 pretrained**. The top-left panel shows the simple paired evaluation curves; the top-right plots their difference so convergence remains visible after the curves overlap.
 
-Green and blue identify the two models; circles mark scratch evaluations and squares mark language-pretrained evaluations. Early fixed evaluations are shown as individual observations because their logging times differ substantially. After 5B tokens, solid lines connect the regularly logged fixed evaluations. Dashed lines and shaded bands summarize training-batch loss.
+Training batches tell a complementary story. The 128k language vocabulary makes the pretrained model much more costly initially, but it catches up within roughly 30M tokens. Later differences fluctuate around zero. The bottom panels average nearby logged batches to remove batch noise; the isolated pretrained-only evaluation at 13M tokens is omitted because the first comparable scratch evaluation is not until 1.05B tokens.
 
 ## Full task results at the comparable setting
 
